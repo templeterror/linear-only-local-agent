@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>linear-agent</title>
+<style>
+  :root { --bg:#0f1115; --panel:#161a22; --line:#262c38; --fg:#e6e8ee; --muted:#8b93a7; --acc:#5e6ad2; --ok:#3ecf8e; --warn:#f5b342; --bad:#f06565; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif; }
+  header { display:flex; align-items:center; gap:16px; padding:10px 18px; border-bottom:1px solid var(--line); background:var(--panel); }
+  header h1 { font-size:14px; margin:0; letter-spacing:.2px; }
+  header .spacer { flex:1; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--muted); display:inline-block; margin-right:6px; }
+  .dot.on { background:var(--ok); } .dot.err { background:var(--bad); }
+  nav { display:flex; gap:2px; padding:0 18px; border-bottom:1px solid var(--line); background:var(--panel); }
+  nav button { background:none; border:0; color:var(--muted); padding:10px 12px; cursor:pointer; border-bottom:2px solid transparent; font:inherit; }
+  nav button.active { color:var(--fg); border-bottom-color:var(--acc); }
+  main { padding:18px; }
+  .row { display:flex; gap:18px; align-items:flex-start; }
+  aside { width:290px; flex:none; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:14px; }
+  .card + .card { margin-top:12px; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); margin:0 0 10px; }
+  h3 { font-size:12px; margin:16px 0 6px; color:var(--muted); }
+  input, select { width:100%; background:#0c0e13; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font:inherit; }
+  input[type=checkbox] { width:auto; }
+  label { display:block; font-size:11.5px; color:var(--muted); margin:8px 0 3px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; }
+  .grid3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:0 14px; }
+  button.btn { background:var(--acc); color:#fff; border:0; border-radius:6px; padding:7px 12px; font:inherit; cursor:pointer; }
+  button.btn.ghost { background:transparent; border:1px solid var(--line); color:var(--fg); }
+  button.btn.danger { background:transparent; border:1px solid var(--bad); color:var(--bad); }
+  button.btn:disabled { opacity:.5; cursor:default; }
+  .actions { display:flex; gap:8px; margin-top:14px; align-items:center; flex-wrap:wrap; }
+  .plist { list-style:none; margin:0; padding:0; }
+  .plist li { padding:8px 10px; border-radius:6px; cursor:pointer; display:flex; align-items:center; gap:8px; }
+  .plist li.sel { background:#1d2230; }
+  .plist li .name { font-weight:600; }
+  .plist li .path { color:var(--muted); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .plist li .en { margin-left:auto; font-size:10px; color:var(--muted); }
+  .plist li .en.on { color:var(--ok); }
+  .checks { list-style:none; margin:10px 0 0; padding:0; }
+  .checks li { display:flex; gap:8px; padding:5px 0; border-top:1px solid var(--line); }
+  .checks .m { width:14px; flex:none; }
+  .checks .n { width:280px; flex:none; }
+  .checks .d { color:var(--muted); flex:1; word-break:break-word; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); }
+  .msg { color:var(--muted); margin-left:8px; }
+  .msg.bad { color:var(--bad); }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:500; font-size:11.5px; }
+  tr.j { cursor:pointer; } tr.j:hover { background:#1a1f2b; }
+  .badge { display:inline-block; padding:2px 7px; border-radius:10px; font-size:11px; background:#232a39; color:var(--fg); white-space:nowrap; }
+  .badge.queued,.badge.triaging,.badge.planning { background:#2a2f44; }
+  .badge.building,.badge.testing,.badge.verifying { background:#3b3670; }
+  .badge.waiting_on_human,.badge.awaiting_approval { background:#5a4a1a; color:#ffd86b; }
+  .badge.pr_open { background:#1c4d38; color:#8ff0c3; }
+  .badge.failed { background:#5a2323; color:#ffb3b3; }
+  .badge.declined { background:#3a3a3a; color:#ccc; }
+  a { color:#9aa4ff; text-decoration:none; } a:hover { text-decoration:underline; }
+  .events { margin:0; padding:8px 12px; background:#0c0e13; border:1px solid var(--line); border-radius:6px; font:11.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; max-height:320px; overflow:auto; }
+  .hint { color:var(--muted); font-size:11.5px; }
+  .empty { color:var(--muted); padding:20px; text-align:center; }
+  code { background:#0c0e13; padding:1px 5px; border-radius:4px; font-size:11.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>linear-agent</h1>
+  <span id="daemon" class="hint"><span class="dot"></span>daemon</span>
+  <div class="spacer"></div>
+  <span class="hint">Linear API key</span>
+  <input id="key" placeholder="lin_api_…" style="width:280px" />
+  <button class="btn" id="saveKey">Save</button>
+  <span id="keyMsg" class="msg"></span>
+</header>
+<nav>
+  <button data-tab="projects" class="active">Projects</button>
+  <button data-tab="jobs">Jobs</button>
+</nav>
+<main>
+  <section id="tab-projects">
+    <div class="row">
+      <aside>
+        <div class="card">
+          <h2>Projects</h2>
+          <ul class="plist" id="plist"></ul>
+          <label>Add a project (absolute path to a git repo)</label>
+          <input id="addPath" placeholder="/Users/you/code/my-app" />
+          <div class="actions"><button class="btn" id="addBtn">Add</button><span id="addMsg" class="msg"></span></div>
+        </div>
+        <div class="card hint">
+          <b>How it works</b><br />
+          Add the label <code id="hintLabel">agent</code> to a Linear ticket. The daemon plans it with Claude Code, builds it with Cursor in a git worktree, runs your tests + dev server, verifies, and posts a preview on the ticket. Reply <code>approve</code> to open the PR.
+        </div>
+      </aside>
+      <div style="flex:1; min-width:0">
+        <div class="card" id="form" hidden>
+          <h2 id="formTitle">Config</h2>
+          <div class="hint" id="formPath"></div>
+          <h3>Linear</h3>
+          <div class="grid3">
+            <div><label>Team</label><select name="linear.teamKey" id="teamSel"></select></div>
+            <div><label>Trigger label</label><input name="linear.label" list="labelList" /><datalist id="labelList"></datalist></div>
+            <div><label>State after PR opens</label><select name="linear.reviewState" id="stateSel"></select></div>
+          </div>
+          <label><input type="checkbox" name="linear.assigneeOnly" /> only tickets assigned to me</label>
+          <h3>Git</h3>
+          <div class="grid3">
+            <div><label>Base branch</label><input name="git.baseBranch" /></div>
+            <div><label>Remote</label><input name="git.remote" /></div>
+            <div><label>Branch prefix</label><input name="git.branchPrefix" /></div>
+          </div>
+          <h3>Commands (run inside the ticket's worktree)</h3>
+          <div class="grid">
+            <div><label>Install</label><input name="commands.install" /></div>
+            <div><label>Test</label><input name="commands.test" /></div>
+            <div><label>Dev server (<code>{port}</code> optional; PORT env is set)</label><input name="commands.dev" /></div>
+            <div><label>Dev URL</label><input name="commands.devUrl" /></div>
+            <div><label>Ready path</label><input name="commands.devReadyPath" /></div>
+          </div>
+          <h3>Engines <span class="hint" style="text-transform:none;letter-spacing:0">· run on your existing Claude Code and Cursor subscriptions — no API keys, no per-ticket cost</span></h3>
+          <div class="grid3">
+            <div><label>Worker</label><select name="worker.kind" id="workerKind"><option value="cursor">Cursor CLI</option><option value="claude">Claude Code</option></select></div>
+            <div><label>Worker model <span class="hint" id="workerModelSrc"></span></label><select name="worker.model" class="model"></select><input class="custom" placeholder="model id" hidden /></div>
+            <div><label>Worker timeout (min)</label><input name="worker.timeoutMin" type="number" /></div>
+          </div>
+          <div class="grid">
+            <div><label>Planner model (Claude Code)</label><select name="planner.model" class="model"></select><input class="custom" placeholder="model id" hidden /></div>
+            <div><label>Planner timeout (min)</label><input name="planner.timeoutMin" type="number" /></div>
+            <div><label>Verifier model (Claude Code)</label><select name="verifier.model" class="model"></select><input class="custom" placeholder="model id" hidden /></div>
+            <div><label>Max verifier retries</label><input name="verifier.maxRetries" type="number" /></div>
+          </div>
+          <h3>Behaviour</h3>
+          <div class="grid3">
+            <div><label>Concurrency</label><input name="concurrency" type="number" min="1" max="4" /></div>
+            <div><label>Poll interval (s)</label><input name="pollSeconds" type="number" min="5" /></div>
+            <div><label>Test timeout (min)</label><input name="testTimeoutMin" type="number" /></div>
+          </div>
+          <label><input type="checkbox" name="approvalGate" /> approval gate — wait for <code>approve</code> on the ticket before opening a PR</label>
+          <label><input type="checkbox" name="screenshots" /> boot dev server and post a screenshot preview</label>
+          <label><input type="checkbox" name="supabase.applyToDev" /> apply migrations to the <b>dev</b> Supabase project via Cursor's Supabase MCP</label>
+          <div class="actions">
+            <button class="btn" id="saveBtn">Save config</button>
+            <button class="btn ghost" id="doctorBtn">Run doctor</button>
+            <button class="btn ghost" id="enableBtn">Enable</button>
+            <button class="btn danger" id="removeBtn">Remove</button>
+            <span id="formMsg" class="msg"></span>
+          </div>
+          <ul class="checks" id="checks"></ul>
+        </div>
+        <div class="card empty" id="noSel">Select or add a project.</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-jobs" hidden>
+    <div class="card">
+      <h2>Jobs <span class="hint" id="jobsMeta"></span></h2>
+      <table>
+        <thead><tr><th>Ticket</th><th>Title</th><th>Project</th><th>State</th><th>Att.</th><th>Branch / PR</th><th>Updated</th><th></th></tr></thead>
+        <tbody id="jobs"></tbody>
+      </table>
+      <div class="empty" id="noJobs">No jobs yet. Label a ticket in Linear.</div>
+    </div>
+    <div class="card" id="eventsCard" hidden>
+      <h2 id="eventsTitle">Events</h2>
+      <pre class="events" id="events"></pre>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const api = async (method, path, body) => {
+  const r = await fetch(path, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+};
+const msg = (el, text, bad) => { el.textContent = text; el.className = 'msg' + (bad ? ' bad' : ''); if (!bad) setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 4000); };
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const ago = (iso) => { const s = (Date.now() - new Date(iso)) / 1000; return s < 60 ? `${s | 0}s` : s < 3600 ? `${(s / 60) | 0}m` : s < 86400 ? `${(s / 3600) | 0}h` : `${(s / 86400) | 0}d`; };
+
+let projects = [], selected = null, teams = [], hasKey = false;
+
+// ---------- tabs ----------
+document.querySelectorAll('nav button').forEach((b) => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('active', x === b));
+  $('#tab-projects').hidden = b.dataset.tab !== 'projects';
+  $('#tab-jobs').hidden = b.dataset.tab !== 'jobs';
+  if (b.dataset.tab === 'jobs') loadJobs();
+});
+
+// ---------- settings ----------
+async function loadSettings() {
+  const s = await api('GET', '/api/settings');
+  hasKey = s.hasLinearKey;
+  $('#key').placeholder = s.linearKeyMasked || 'lin_api_…';
+  if (hasKey) loadTeams();
+}
+$('#saveKey').onclick = async () => {
+  try {
+    const r = await api('POST', '/api/settings', { linearApiKey: $('#key').value });
+    msg($('#keyMsg'), `saved · ${r.viewer.name}`);
+    $('#key').value = '';
+    await loadSettings();
+  } catch (e) { msg($('#keyMsg'), e.message, true); }
+};
+async function loadTeams() {
+  try { teams = await api('GET', '/api/linear/teams'); } catch (e) { teams = []; }
+  const sel = $('#teamSel');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">— choose team —</option>' + teams.map((t) => `<option value="${esc(t.key)}">${esc(t.key)} · ${esc(t.name)}</option>`).join('');
+  if (cur) sel.value = cur;
+}
+async function loadTeamMeta(teamKey, wantState) {
+  const stSel = $('#stateSel');
+  if (!teamKey || !hasKey) { stSel.innerHTML = `<option value="${esc(wantState || 'In Review')}">${esc(wantState || 'In Review')}</option>`; return; }
+  try {
+    const [states, labels] = await Promise.all([api('GET', `/api/linear/states?team=${encodeURIComponent(teamKey)}`), api('GET', `/api/linear/labels?team=${encodeURIComponent(teamKey)}`)]);
+    stSel.innerHTML = states.map((s) => `<option value="${esc(s.name)}">${esc(s.name)} (${esc(s.type)})</option>`).join('');
+    if (wantState && states.some((s) => s.name === wantState)) stSel.value = wantState;
+    else { const r = states.find((s) => /review/i.test(s.name)) || states.find((s) => s.type === 'started'); if (r) stSel.value = r.name; }
+    $('#labelList').innerHTML = labels.map((l) => `<option value="${esc(l.name)}">`).join('');
+  } catch (e) { stSel.innerHTML = `<option value="${esc(wantState || 'In Review')}">${esc(wantState || 'In Review')}</option>`; }
+}
+$('#teamSel').onchange = () => loadTeamMeta($('#teamSel').value, null);
+
+// ---------- model dropdowns ----------
+const modelCache = {};
+const modelsFor = (kind) => (modelCache[kind] ||= api('GET', `/api/models?kind=${kind}`).catch(() => ({ models: [], source: 'static' })));
+async function fillModelSelect(sel, kind, current) {
+  const { models, source } = await modelsFor(kind);
+  const list = [...models];
+  if (current && !list.includes(current)) list.unshift(current);
+  sel.innerHTML = list.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join('') + '<option value="__custom">custom…</option>';
+  sel.value = current && list.includes(current) ? current : list[0] || '__custom';
+  const custom = sel.parentElement.querySelector('input.custom');
+  custom.hidden = sel.value !== '__custom';
+  if (sel.name === 'worker.model') $('#workerModelSrc').textContent = source === 'live' ? '· from cursor-agent' : kind === 'cursor' ? '· static list (log in to Cursor for live models)' : '';
+}
+document.querySelectorAll('select.model').forEach((sel) => sel.onchange = () => {
+  const custom = sel.parentElement.querySelector('input.custom');
+  custom.hidden = sel.value !== '__custom';
+  if (!custom.hidden) custom.focus();
+});
+$('#workerKind').onchange = () => fillModelSelect(document.querySelector('[name="worker.model"]'), $('#workerKind').value, null);
+
+// ---------- daemon status ----------
+async function loadStatus() {
+  try {
+    const s = await api('GET', '/api/status');
+    const d = $('#daemon');
+    const running = s.daemon.running;
+    d.innerHTML = `<span class="dot ${s.daemon.lastError ? 'err' : running ? 'on' : ''}"></span>daemon · ${s.daemon.ticks} polls${s.daemon.inFlight.length ? ` · ${s.daemon.inFlight.length} running` : ''}${s.daemon.lastError ? ` · <span class="bad">${esc(s.daemon.lastError)}</span>` : ''}`;
+  } catch {}
+}
+
+// ---------- projects ----------
+async function loadProjects() {
+  projects = await api('GET', '/api/projects');
+  const ul = $('#plist');
+  ul.innerHTML = projects.map((p) => `<li data-path="${esc(p.path)}" class="${selected === p.path ? 'sel' : ''}"><div style="min-width:0"><div class="name">${esc(p.name)}</div><div class="path">${esc(p.path)}</div></div><span class="en ${p.enabled ? 'on' : ''}">${p.enabled ? 'ENABLED' : 'off'}</span></li>`).join('') || '<li class="hint">none yet</li>';
+  ul.querySelectorAll('li[data-path]').forEach((li) => li.onclick = () => select(li.dataset.path));
+  if (selected && !projects.some((p) => p.path === selected)) selected = null;
+  if (!selected && projects[0]) select(projects[0].path); else if (selected) fillForm();
+  $('#form').hidden = !selected; $('#noSel').hidden = !!selected;
+}
+function select(path) { selected = path; $('#checks').innerHTML = ''; loadProjects(); }
+function get(o, k) { return k.split('.').reduce((a, b) => (a == null ? a : a[b]), o); }
+function fillForm() {
+  const p = projects.find((x) => x.path === selected); if (!p) return;
+  $('#formTitle').textContent = p.name + (p.enabled ? ' · enabled' : '');
+  $('#formPath').textContent = p.path + (p.hasConfigFile ? '' : '  (no .linear-agent.json yet — save to create)');
+  $('#hintLabel').textContent = p.linear.label || 'agent';
+  document.querySelectorAll('#form [name]').forEach((el) => {
+    const v = get(p, el.name);
+    if (el.type === 'checkbox') el.checked = !!v; else if (el.tagName === 'SELECT' && (el.id === 'stateSel' || el.classList.contains('model'))) {/* filled async below */} else el.value = v ?? '';
+  });
+  // A workspace with a single team needs no choice — preselect it so Save/Doctor just work.
+  const teamKey = p.linear.teamKey || (teams.length === 1 ? teams[0].key : '');
+  $('#teamSel').value = teamKey;
+  loadTeamMeta(teamKey, p.linear.reviewState);
+  fillModelSelect(document.querySelector('[name="worker.model"]'), p.worker.kind, p.worker.model);
+  fillModelSelect(document.querySelector('[name="planner.model"]'), 'claude', p.planner.model);
+  fillModelSelect(document.querySelector('[name="verifier.model"]'), 'claude', p.verifier.model);
+  $('#enableBtn').textContent = p.enabled ? 'Disable' : 'Enable';
+}
+function readForm() {
+  const cfg = {};
+  document.querySelectorAll('#form [name]').forEach((el) => {
+    const keys = el.name.split('.'); let o = cfg;
+    for (let i = 0; i < keys.length - 1; i++) o = o[keys[i]] = o[keys[i]] || {};
+    let v = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value;
+    if (el.classList.contains('model') && v === '__custom') v = el.parentElement.querySelector('input.custom').value.trim();
+    o[keys[keys.length - 1]] = v;
+  });
+  return cfg;
+}
+$('#addBtn').onclick = async () => {
+  try {
+    const r = await api('POST', '/api/projects', { path: $('#addPath').value.trim() });
+    msg($('#addMsg'), `added · detected ${r.detected.framework || 'node'}/${r.detected.packageManager || '?'}`);
+    $('#addPath').value = '';
+    selected = r.project.path; await loadProjects();
+  } catch (e) { msg($('#addMsg'), e.message, true); }
+};
+$('#saveBtn').onclick = async () => {
+  try {
+    const r = await api('PUT', '/api/projects/config', { path: selected, config: readForm() });
+    msg($('#formMsg'), r.errors.length ? 'saved with issues: ' + r.errors.join('; ') : 'saved', r.errors.length > 0);
+    await loadProjects();
+  } catch (e) { msg($('#formMsg'), e.message, true); }
+};
+$('#doctorBtn').onclick = async () => {
+  $('#doctorBtn').disabled = true; $('#checks').innerHTML = '<li class="hint">running checks…</li>';
+  try {
+    await api('PUT', '/api/projects/config', { path: selected, config: readForm() });
+    const checks = await api('POST', '/api/doctor', { path: selected });
+    $('#checks').innerHTML = checks.map((c) => `<li><span class="m ${c.ok ? 'ok' : c.warn ? 'warn' : 'bad'}">${c.ok ? '✔' : c.warn ? '⚠' : '✘'}</span><span class="n">${esc(c.name)}</span><span class="d">${esc(c.detail)}${!c.ok && c.fix ? ` <span class="warn">→ ${esc(c.fix)}</span>` : ''}</span></li>`).join('');
+    await loadProjects();
+  } catch (e) { $('#checks').innerHTML = `<li class="bad">${esc(e.message)}</li>`; }
+  $('#doctorBtn').disabled = false;
+};
+$('#enableBtn').onclick = async () => {
+  const p = projects.find((x) => x.path === selected); if (!p) return;
+  try {
+    if (!p.enabled) await api('PUT', '/api/projects/config', { path: selected, config: readForm() });
+    await api('POST', '/api/projects/enable', { path: selected, enabled: !p.enabled });
+    msg($('#formMsg'), !p.enabled ? 'enabled — label tickets in Linear to start' : 'disabled');
+    await loadProjects();
+  } catch (e) { msg($('#formMsg'), e.message, true); }
+};
+$('#removeBtn').onclick = async () => {
+  try { await api('DELETE', `/api/projects?path=${encodeURIComponent(selected)}`); selected = null; await loadProjects(); } catch (e) { msg($('#formMsg'), e.message, true); }
+};
+
+// ---------- jobs ----------
+let openJob = null;
+async function loadJobs() {
+  if ($('#tab-jobs').hidden) return;
+  const jobs = (await api('GET', '/api/jobs')).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  $('#noJobs').hidden = jobs.length > 0;
+  $('#jobsMeta').textContent = jobs.length ? `· ${jobs.length} total · ${jobs.filter((j) => !['pr_open', 'failed', 'declined'].includes(j.state)).length} active` : '';
+  $('#jobs').innerHTML = jobs.map((j) => `<tr class="j" data-id="${esc(j.issueId)}">
+    <td><a href="${esc(j.url)}" target="_blank">${esc(j.identifier)}</a></td>
+    <td>${esc(j.title)}</td>
+    <td>${esc(j.projectPath.split('/').pop())}</td>
+    <td><span class="badge ${esc(j.state)}">${esc(j.state)}</span></td>
+    <td>${j.attempt}</td>
+    <td>${j.prUrl ? `<a href="${esc(j.prUrl)}" target="_blank">PR</a>` : `<code>${esc(j.branch || '')}</code>`}</td>
+    <td>${ago(j.updatedAt)}</td>
+    <td>${['pr_open', 'failed', 'declined'].includes(j.state) ? `<button class="btn ghost" data-del="${esc(j.issueId)}" title="forget this job so the ticket can be re-run">↺</button>` : ''}</td>
+  </tr>`).join('');
+  $('#jobs').querySelectorAll('tr.j').forEach((tr) => tr.onclick = (ev) => { if (ev.target.dataset.del) return; showEvents(tr.dataset.id); });
+  $('#jobs').querySelectorAll('[data-del]').forEach((b) => b.onclick = async () => { await api('DELETE', `/api/job?id=${encodeURIComponent(b.dataset.del)}`); loadJobs(); });
+  if (openJob) showEvents(openJob);
+}
+async function showEvents(id) {
+  openJob = id;
+  const { job, events } = await api('GET', `/api/job?id=${encodeURIComponent(id)}`);
+  $('#eventsCard').hidden = false;
+  $('#eventsTitle').textContent = `${job.identifier} · ${job.title}`;
+  $('#events').textContent = events.map((e) => `${e.at.slice(11, 19)}  ${(e.fromState || '·').padEnd(18)} → ${e.toState.padEnd(18)} ${e.note || ''}`).join('\n') + (job.error ? `\n\nerror: ${job.error}` : '') + (job.worktree ? `\nworktree: ${job.worktree}` : '');
+}
+
+// ---------- boot ----------
+(async () => { await loadSettings(); await loadProjects(); loadStatus(); })();
+setInterval(loadStatus, 5000);
+setInterval(loadJobs, 5000);
+</script>
+</body>
+</html>

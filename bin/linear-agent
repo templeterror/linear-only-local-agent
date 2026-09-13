@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+# node:sqlite is stable enough for us; silence its ExperimentalWarning.
+export NODE_OPTIONS="${NODE_OPTIONS:-} --disable-warning=ExperimentalWarning"
+exec "$(dirname "$0")/../node_modules/.bin/tsx" "$(dirname "$0")/../src/cli.ts" "$@"

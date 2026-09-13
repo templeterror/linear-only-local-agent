@@ -1,0 +1,20 @@
+{
+  "name": "linear-only-local-agent",
+  "version": "0.1.0",
+  "description": "Local dev agent daemon: Linear is the only interface. Claude Code plans/verifies, Cursor builds, in your own environment.",
+  "type": "module",
+  "bin": { "linear-agent": "./bin/linear-agent" },
+  "scripts": {
+    "start": "./bin/linear-agent start",
+    "once": "./bin/linear-agent once",
+    "status": "./bin/linear-agent status",
+    "typecheck": "tsc --noEmit",
+    "test:integration": "tsx test/integration.ts"
+  },
+  "engines": { "node": ">=22.13" },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0"
+  }
+}

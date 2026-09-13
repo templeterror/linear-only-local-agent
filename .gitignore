@@ -1,0 +1,7 @@
+node_modules/
+.env
+*.log
+.DS_Store
+eval/RESULTS.md
+eval/.state.json
+.tmp/
