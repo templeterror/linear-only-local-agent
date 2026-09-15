@@ -23,7 +23,15 @@ export const fmt = {
 
   declined: (reason: string) => wrap('declined', `I'm not going to automate this one.\n\n**Reason:** ${reason}\n\n${RETRY_HINT}`),
 
-  tryAgainAck: (state: 'building' | 'triaging', branch: string) => wrap('trying again', state === 'building' ? `Re-running the build on the existing branch \`${branch}\` (same worktree, same plan), then tests and verification.` : 'Re-planning from the ticket as it is now (same worktree).'),
+  tryAgainAck: (state: 'building' | 'triaging' | 'awaiting_plan_approval', branch: string) =>
+    wrap(
+      'trying again',
+      state === 'building'
+        ? `Re-running the build on the existing branch \`${branch}\` (same worktree, same plan), then tests and verification.`
+        : state === 'awaiting_plan_approval'
+          ? `Keeping the existing plan and branch \`${branch}\`. The plan was never approved, so reply \`approve\` to start the build, or describe what to change.`
+          : 'Re-planning from the ticket as it is now (same worktree).',
+    ),
 
   resumedAck: (state: string) => wrap('resuming', `Picking up where I left off (\`${state}\`).`),
 

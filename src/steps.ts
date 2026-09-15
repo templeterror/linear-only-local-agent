@@ -332,6 +332,10 @@ async function tryAgain(ctx: Ctx, job: Job): Promise<void> {
     // Paused on a usage limit: just release it in place.
     ctx.db.forceState(job.issueId, job.state, 'resumed early by human', patch);
     await post(ctx, job, fmt.resumedAck(job.state));
+  } else if (job.specJson && job.worktree && ctx.project.planApprovalGate && !job.planApproved) {
+    // The plan was never approved (failed before the gate, or declined): go back to the gate, not straight to the build.
+    ctx.db.forceState(job.issueId, 'awaiting_plan_approval', 'try again (plan not yet approved)', patch);
+    await post(ctx, job, fmt.tryAgainAck('awaiting_plan_approval', job.branch ?? ''));
   } else if (job.specJson && job.worktree) {
     ctx.db.forceState(job.issueId, 'building', 'try again (same worktree)', patch);
     await post(ctx, job, fmt.tryAgainAck('building', job.branch ?? ''));

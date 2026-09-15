@@ -92,7 +92,7 @@ Now add the `agent` label to a ticket and watch the **Jobs** tab (or `linear-age
 Three commands work in any state where the daemon is listening (question, plan review, PR review, failed, declined, and between steps):
 
 - **`-approveplan-`** — approve the plan (at the gate) or pre-approve it (earlier), so the build starts without a plan review.
-- **`-tryagain-`** — same worktree and branch, redo from the build step (re-triage if there is no plan yet).
+- **`-tryagain-`** — same worktree and branch, redo from the build step (back to the plan gate if the plan was never approved; re-triage if there is no plan yet).
 - **`-startover-`** — delete the worktree and local branch, fresh triage and plan.
 
 Remove the label at any time to cancel.
