@@ -73,7 +73,8 @@ function dedupe(v: GuardViolation[]): GuardViolation[] {
 export function extractMigrationSql(diff: string): string {
   const parts: string[] = [];
   for (const [file, lines] of addedLinesByFile(diff)) {
-    if (/\.sql$/i.test(file) && /migration/i.test(file)) parts.push(`-- ${file}\n${lines.join('\n')}`);
+    // Any added SQL under a migrations/schema/db directory (supabase/migrations, backend/schema, prisma/migrations, ...)
+    if (/\.sql$/i.test(file) && /(migration|schema|\/db\/|\/sql\/)/i.test(file)) parts.push(`-- ${file}\n${lines.join('\n')}`);
   }
   return parts.join('\n\n');
 }

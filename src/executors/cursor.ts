@@ -2,6 +2,7 @@
 import { run } from '../proc.ts';
 import { stageAndDiff } from '../git.ts';
 import { log } from '../log.ts';
+import { detectUsageLimit } from '../claude-cli.ts';
 import type { Executor, ExecutorInput, ExecutorResult } from './types.ts';
 
 const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '');
@@ -24,6 +25,8 @@ export const cursorExecutor: Executor = {
     log('cursor', `done in ${dur}s exit=${r.code} timedOut=${r.timedOut} session=${sessionId ?? '?'}`);
 
     const staged = await stageAndDiff(input.worktree);
+    const limit = staged.files.length === 0 ? detectUsageLimit(out + '\n' + stripAnsi(r.stderr)) : null;
+    if (limit) return { ok: false, summary, sessionId, error: `worker usage limit: ${limit.message}`, limit, ...staged };
     if (r.timedOut) return { ok: false, summary, sessionId, error: `cursor-agent timed out after ${dur}s`, ...staged };
     if (r.code !== 0 && !staged.files.length) {
       return { ok: false, summary, sessionId, error: `cursor-agent exited ${r.code}: ${stripAnsi(r.stderr || out).trim().slice(0, 500)}`, ...staged };

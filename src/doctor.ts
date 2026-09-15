@@ -7,7 +7,7 @@ import { loadProject, packageDirs } from './registry.ts';
 import { Linear } from './linear.ts';
 import { ghAuthed } from './github.ts';
 import { run } from './proc.ts';
-import { findBrowser } from './runner.ts';
+import { findBrowser, loadAuth } from './browser.ts';
 
 export interface Check {
   name: string;
@@ -88,6 +88,8 @@ export async function doctor(projectPath?: string): Promise<Check[]> {
 
   checks.push({ name: 'Test command', ok: !!project.commands.test, detail: project.commands.test || 'missing' });
   checks.push({ name: 'Dev command', ok: !!project.commands.dev, warn: !project.commands.dev, detail: project.commands.dev || 'missing — previews disabled' });
+  const auth = loadAuth(project.name);
+  checks.push({ name: 'Preview login (for pages behind auth)', ok: !!auth, warn: !auth, detail: auth ? `captured ${auth.capturedAt.slice(0, 16).replace('T', ' ')} · ${auth.cookies.length} cookies, ${Object.keys(auth.localStorage).length} localStorage keys` : 'not captured — screenshots will show the logged-out state', fix: 'Projects → "Log in for previews"' });
   const linkable = packageDirs(project.path).filter((d) => fs.existsSync(path.join(project.path, d, 'node_modules')));
   checks.push({ name: 'node_modules present (linked into worktrees)', ok: linkable.length > 0, warn: true, detail: linkable.length ? linkable.map((d) => `${d}/node_modules`).join(', ') : `absent — each worktree will run "${project.commands.install || '(no install cmd)'}"` });
 

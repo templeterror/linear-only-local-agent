@@ -10,8 +10,10 @@ import { fmt } from './comments.ts';
 import { triage, resumeTriage, type PlannerOutcome, type Spec } from './planner.ts';
 import { verify } from './verifier.ts';
 import { getExecutor } from './executors/index.ts';
+import type { UsageLimit } from './claude-cli.ts';
+import { ACTIVE_STATES } from './state.ts';
 import { workerPrompt, workerFixPrompt } from './prompts/index.ts';
-import { ensureWorktree, stageAndDiff, commitAll, pushBranch, slugify } from './git.ts';
+import { ensureWorktree, removeWorktree, deleteLocalBranch, stageAndDiff, commitAll, commitsAhead, pushBranch, slugify } from './git.ts';
 import { createPr } from './github.ts';
 import { linkOrInstallDeps, runTests, bootAndScreenshot } from './runner.ts';
 import { scanDiff, extractMigrationSql } from './guards.ts';
@@ -40,6 +42,22 @@ async function fail(ctx: Ctx, job: Job, reason: string, detail?: string): Promis
     log(job.identifier, `could not post failure comment: ${e.message}`);
   }
   ctx.db.transition(job.issueId, 'failed', reason, { error: reason });
+}
+
+/**
+ * A subscription usage limit is not a failure: keep the job in its current state, set retryAfter so the daemon
+ * skips it until the limit resets, and tell the human once per hour at most.
+ */
+async function pause(ctx: Ctx, job: Job, limit: UsageLimit): Promise<void> {
+  const resumeAt = limit.retryAt ?? new Date(Date.now() + 15 * 60_000);
+  log(job.identifier, `paused in ${job.state} until ${resumeAt.toISOString()}: ${limit.message}`);
+  ctx.db.updateJob(job.issueId, { retryAfter: resumeAt.toISOString() });
+  ctx.db.addEvent(job.issueId, `paused (usage limit) until ${resumeAt.toISOString()}: ${limit.message}`);
+  const lastNotice = ctx.db.listEvents(job.issueId).filter((e) => e.note?.startsWith('paused-notice')).pop();
+  if (!lastNotice || Date.now() - new Date(lastNotice.at).getTime() > 60 * 60_000) {
+    await post(ctx, job, fmt.paused(limit.message, resumeAt));
+    ctx.db.addEvent(job.issueId, 'paused-notice posted');
+  }
 }
 
 /** Entry point used by the daemon. Re-reads the job so the dispatch is always on fresh state. */
@@ -76,6 +94,7 @@ async function stepQueued(ctx: Ctx, job: Job): Promise<void> {
 }
 
 async function applyTriage(ctx: Ctx, job: Job, out: PlannerOutcome): Promise<void> {
+  if (out.limit) return pause(ctx, job, out.limit);
   if (!out.ok || !out.result) return fail(ctx, job, `planner failed: ${out.error}`);
   const r = out.result;
   const patch = { plannerSessionId: out.sessionId ?? job.plannerSessionId };
@@ -137,6 +156,7 @@ async function stepBuilding(ctx: Ctx, job: Job): Promise<void> {
   log(job.identifier, `worker=${executor.kind} model=${model} fix=${isFix}`);
   const res = await executor.run({ worktree: job.worktree, prompt, model, timeoutMs: project.worker.timeoutMin * 60_000, resumeId: isFix ? job.workerSessionId ?? undefined : undefined });
   ctx.db.updateJob(job.issueId, { workerSessionId: res.sessionId ?? job.workerSessionId, diffSummary: res.diffStat });
+  if (res.limit) return pause(ctx, job, res.limit);
   if (!res.ok && res.files.length === 0) return fail(ctx, job, `worker failed: ${res.error}`, res.summary);
 
   const violations = scanDiff(res.diff, res.files);
@@ -146,7 +166,14 @@ async function stepBuilding(ctx: Ctx, job: Job): Promise<void> {
     ctx.db.transition(job.issueId, 'failed', 'guardrail: ' + violations.map((v) => v.rule).join(','), { error: 'guardrail violation' });
     return;
   }
-  ctx.db.transition(job.issueId, 'testing', `${res.files.length} files changed`, { migrationSql: extractMigrationSql(res.diff) || null, fixInstructions: null });
+  // A human asked for changes and the worker made none (usually because the request collided with its rules):
+  // hand the worker's explanation back instead of re-verifying an unchanged branch.
+  if (isFix && res.files.length === 0 && job.attempt === 0 && (await commitsAhead(job.worktree, `${project.git.remote}/${project.git.baseBranch}`)) > 0) {
+    await post(ctx, job, fmt.noChanges(res.summary));
+    ctx.db.transition(job.issueId, 'awaiting_approval', 'change request produced no changes', { fixInstructions: null });
+    return;
+  }
+  ctx.db.transition(job.issueId, 'testing', `${res.files.length} files changed`, { migrationSql: extractMigrationSql(res.diff) || job.migrationSql, fixInstructions: null });
 }
 
 async function stepTesting(ctx: Ctx, job: Job): Promise<void> {
@@ -183,9 +210,11 @@ async function stepVerifying(ctx: Ctx, job: Job): Promise<void> {
   const { project } = ctx;
   if (!job.worktree || !job.branch) return fail(ctx, job, 'no worktree recorded for verifying step');
   const spec = specOf(job);
-  const staged = await stageAndDiff(job.worktree);
+  const baseRef = `${project.git.remote}/${project.git.baseBranch}`;
+  const staged = await stageAndDiff(job.worktree, baseRef); // whole branch: committed earlier attempts + new work
   const testExit = job.testPassed === null ? null : job.testPassed ? 0 : 1;
   const out = await verify({ project, worktree: job.worktree, ticket: ticketOf(job), spec, testExit, testOutput: job.testOutput ?? '', diff: staged.diff, diffStat: staged.diffStat });
+  if (out.limit) return pause(ctx, job, out.limit);
   if (!out.ok || !out.verdict) return fail(ctx, job, `verifier failed: ${out.error}`);
   const v = out.verdict;
   const attempt = job.attempt + 1;
@@ -204,9 +233,9 @@ async function stepVerifying(ctx: Ctx, job: Job): Promise<void> {
 
   // pass → commit, push, post preview
   const sha = await commitAll(job.worktree, `${job.identifier}: ${job.title}\n\n${spec.summary}\n\nLinear: ${job.url ?? job.identifier}`);
-  if (!sha) return fail(ctx, job, 'verifier passed but there is nothing to commit (empty diff)');
+  if (!sha && (await commitsAhead(job.worktree, baseRef)) === 0) return fail(ctx, job, 'verifier passed but the branch has no changes (empty diff)');
   await pushBranch({ worktree: job.worktree, remote: project.git.remote, branch: job.branch, base: project.git.baseBranch, branchPrefix: project.git.branchPrefix });
-  log(job.identifier, `pushed ${job.branch} @ ${sha.slice(0, 8)}`);
+  log(job.identifier, `pushed ${job.branch}${sha ? ` @ ${sha.slice(0, 8)}` : ' (no new commit)'}`);
 
   await post(
     ctx,
@@ -257,14 +286,53 @@ async function openPr(ctx: Ctx, job: Job): Promise<string> {
 }
 
 const APPROVE_RE = /^\s*(approve[d]?|lgtm|ship( it)?|:shipit:|✅|👍|yes,? (open|create) (the |a )?pr)\b/i;
+/** `-tryagain-`: same worktree, redo from the build step. Dashes make it unmistakable from ordinary conversation.
+ *  Linear's editor markdown-escapes a leading dash (`\-tryagain-`), so both dashes may carry a backslash. */
+const RETRY_RE = /^\s*\\?-tryagain\\?-\s*$/i;
+/** `-startover-`: fresh worktree, fresh triage. */
+const START_OVER_RE = /^\s*\\?-startover\\?-\s*$/i;
 
-/** Called by the daemon when a human comments on a job in an idle state. */
+/** `try again`: keep the worktree/branch, go back to building (or triaging if there is no spec yet). */
+async function tryAgain(ctx: Ctx, job: Job): Promise<void> {
+  const fresh = await ctx.linear.issue(job.issueId);
+  const patch = { attempt: 0, error: null, fixInstructions: null, retryAfter: null, archived: 0, title: fresh?.title ?? job.title, description: fresh?.description ?? job.description };
+  if (job.retryAfter && ACTIVE_STATES.includes(job.state)) {
+    // Paused on a usage limit: just release it in place.
+    ctx.db.forceState(job.issueId, job.state, 'resumed early by human', patch);
+    await post(ctx, job, fmt.resumedAck(job.state));
+  } else if (job.specJson && job.worktree) {
+    ctx.db.forceState(job.issueId, 'building', 'try again (same worktree)', patch);
+    await post(ctx, job, fmt.tryAgainAck('building', job.branch ?? ''));
+  } else {
+    ctx.db.forceState(job.issueId, 'triaging', 'try again (re-triage)', { ...patch, plannerSessionId: null });
+    await post(ctx, job, fmt.tryAgainAck('triaging', ''));
+  }
+  log(job.identifier, 'try again requested via comment');
+}
+
+/** `start over`: throw away the worktree and branch, start from queued as if the label had just been added. */
+async function startOver(ctx: Ctx, job: Job): Promise<void> {
+  const { project } = ctx;
+  if (job.worktree) await removeWorktree(project.path, job.worktree).catch((e) => log(job.identifier, `worktree remove failed: ${e.message}`));
+  if (job.branch) await deleteLocalBranch(project.path, job.branch).catch(() => null);
+  const fresh = await ctx.linear.issue(job.issueId);
+  ctx.db.resetJob(job.issueId, 'start over (fresh worktree)');
+  ctx.db.updateJob(job.issueId, { worktree: null, branch: null, diffSummary: null, testOutput: null, testPassed: null, screenshotUrl: null, migrationSql: null, title: fresh?.title ?? job.title, description: fresh?.description ?? job.description });
+  await post(ctx, job, fmt.startOverAck());
+  log(job.identifier, 'start over requested via comment');
+}
+
+/** Called by the daemon when a human comments on a job in an idle or finished state. */
 export async function handleHumanComment(ctx: Ctx, issueId: string, comment: LinearComment): Promise<void> {
   const job = ctx.db.getJob(issueId);
   if (!job) return;
   const text = comment.body.trim();
   log(job.identifier, `human comment in ${job.state}: ${text.slice(0, 80)}`);
   try {
+    // Explicit commands work in every state the daemon listens in.
+    if (START_OVER_RE.test(text)) return await startOver(ctx, job);
+    if (RETRY_RE.test(text)) return await tryAgain(ctx, job);
+
     if (job.state === 'waiting_on_human') {
       const out = job.plannerSessionId
         ? await resumeTriage(ctx.project, job.plannerSessionId, text)
@@ -279,6 +347,7 @@ export async function handleHumanComment(ctx: Ctx, issueId: string, comment: Lin
         ctx.db.transition(job.issueId, 'building', 'changes requested by human', { fixInstructions: text, attempt: 0 });
       }
     }
+    // failed / declined: only the two commands above do anything; other comments are conversation.
   } catch (e: any) {
     const fresh = ctx.db.getJob(issueId);
     if (fresh && !['failed', 'declined', 'pr_open'].includes(fresh.state)) await fail(ctx, fresh, `error handling comment: ${e.message}`, e.stack);

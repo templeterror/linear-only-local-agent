@@ -10,13 +10,23 @@ export function isAgentComment(body: string): boolean {
 }
 
 const wrap = (title: string, body: string) => `${HEADER} · ${title}\n\n${body}`.trim();
+const RETRY_HINT = '_Reply **`-tryagain-`** to redo the build in the same worktree, or **`-startover-`** for a fresh worktree and a new plan (edit the ticket first if it needs changes). Remove the label to drop it._';
 
 export const fmt = {
   pickedUp: (projectName: string) => wrap('picked up', `Working on this in \`${projectName}\`. I'll triage it, write a spec, build it in an isolated worktree, run tests locally, verify, and post a preview here.`),
 
-  question: (question: string) => wrap('question', `${question}\n\n_Reply in a comment and I'll continue from where I left off._`),
+  question: (question: string) => wrap('question', `${question}\n\n_Reply in a comment and I'll continue from where I left off. (\`-startover-\` re-plans from scratch.)_`),
 
-  declined: (reason: string) => wrap('declined', `I'm not going to automate this one.\n\n**Reason:** ${reason}\n\n_Remove and re-add the label to retry after editing the ticket._`),
+  declined: (reason: string) => wrap('declined', `I'm not going to automate this one.\n\n**Reason:** ${reason}\n\n${RETRY_HINT}`),
+
+  tryAgainAck: (state: 'building' | 'triaging', branch: string) => wrap('trying again', state === 'building' ? `Re-running the build on the existing branch \`${branch}\` (same worktree, same plan), then tests and verification.` : 'Re-planning from the ticket as it is now (same worktree).'),
+
+  resumedAck: (state: string) => wrap('resuming', `Picking up where I left off (\`${state}\`).`),
+
+  startOverAck: () => wrap('starting over', 'Deleted the worktree and local branch. Starting from scratch: fresh triage, fresh plan, fresh build.'),
+
+  noChanges: (summary: string) =>
+    wrap('no changes made', `The worker didn't change anything in response to that request. Its explanation:\n\n> ${summary.trim().slice(0, 1500).replace(/\n/g, '\n> ')}\n\nThe previous build is still on the branch. Reply with different instructions, or \`approve\` to open the PR as is.`),
 
   spec: (spec: Spec, branch: string, worker: string) =>
     wrap(
@@ -57,16 +67,19 @@ export const fmt = {
         p.migrationSql ? `\n**Migration SQL (review before merging; run on prod manually):**\n\`\`\`sql\n${p.migrationSql.trim()}\n\`\`\`` : '',
         p.testTail ? `\n<details><summary>Test output (tail)</summary>\n\n\`\`\`\n${p.testTail.trim()}\n\`\`\`\n</details>` : '',
         '',
-        p.approvalGate ? '**Reply `approve` to open a PR.** Any other reply is treated as change requests and sent back to the worker.' : 'Opening a PR now.',
+        p.approvalGate ? '**Reply `approve` to open a PR.** Describe changes and they go back to the worker. `-tryagain-` redoes the build in this worktree; `-startover-` begins from scratch.' : 'Opening a PR now.',
       ].join('\n'),
     ),
 
   prOpened: (url: string) => wrap('PR opened', `${url}\n\nReview and merge when ready. Nothing is merged or deployed automatically.`),
 
-  failed: (reason: string, detail?: string) => wrap('failed', `${reason}${detail ? `\n\n<details><summary>Details</summary>\n\n\`\`\`\n${detail.trim().slice(0, 4000)}\n\`\`\`\n</details>` : ''}\n\n_Remove and re-add the label to retry._`),
+  failed: (reason: string, detail?: string) => wrap('failed', `${reason}${detail ? `\n\n<details><summary>Details</summary>\n\n\`\`\`\n${detail.trim().slice(0, 4000)}\n\`\`\`\n</details>` : ''}\n\n${RETRY_HINT}`),
 
   guardFailure: (violations: GuardViolation[]) =>
-    wrap('blocked by guardrail', ['The worker produced changes that violate a safety rule, so nothing was pushed:', '', ...violations.map((v) => `- **${v.rule}**${v.file ? ` in \`${v.file}\`` : ''}: ${v.detail}`), '', '_Remove and re-add the label to retry after editing the ticket._'].join('\n')),
+    wrap('blocked by guardrail', ['The worker produced changes that violate a safety rule, so nothing was pushed:', '', ...violations.map((v) => `- **${v.rule}**${v.file ? ` in \`${v.file}\`` : ''}: ${v.detail}`), '', RETRY_HINT].join('\n')),
+
+  paused: (reason: string, resumeAt: Date) =>
+    wrap('paused', `Usage limit hit: _${reason}_\n\nNothing was lost — I'll pick this up again automatically at **${resumeAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}** (${Intl.DateTimeFormat().resolvedOptions().timeZone}). No action needed.\n\n_To resume sooner (limit reset early, or you switched the worker), reply \`-tryagain-\`._`),
 
   changesRequested: (text: string) => wrap('changes requested', `Got it — sending this back to the worker:\n\n> ${text.trim().replace(/\n/g, '\n> ')}`),
 };

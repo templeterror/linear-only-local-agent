@@ -1,6 +1,6 @@
 // Planner: one `claude -p` session per ticket that triages and writes the spec.
 // A clarification reply resumes the same session so repo context is retained.
-import { callClaude, READ_ONLY_TOOLS, WRITE_TOOLS } from './claude-cli.ts';
+import { callClaude, READ_ONLY_TOOLS, WRITE_TOOLS, type UsageLimit } from './claude-cli.ts';
 import { TRIAGE_SCHEMA, triagePrompt, triageResumePrompt, type TicketRef } from './prompts/index.ts';
 import type { Project } from './registry.ts';
 
@@ -27,6 +27,7 @@ export interface PlannerOutcome {
   sessionId?: string;
   costUsd?: number;
   error?: string;
+  limit?: UsageLimit;
 }
 
 const PLANNER_SYSTEM = 'You are a careful senior engineer acting as a planner. You never edit files. You answer with the requested structured output only.';
@@ -93,7 +94,7 @@ export async function resumeTriage(project: Project, sessionId: string, reply: s
 }
 
 function finish(res: Awaited<ReturnType<typeof callClaude<TriageResult>>>): PlannerOutcome {
-  if (!res.ok || !res.output) return { ok: false, error: res.error ?? 'planner returned nothing', sessionId: res.sessionId, costUsd: res.costUsd };
+  if (!res.ok || !res.output) return { ok: false, error: res.error ?? 'planner returned nothing', sessionId: res.sessionId, costUsd: res.costUsd, limit: res.limit };
   const result = normalize(res.output);
   const bad = validate(result);
   if (bad) return { ok: false, error: `planner output invalid: ${bad}`, sessionId: res.sessionId, costUsd: res.costUsd };

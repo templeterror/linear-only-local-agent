@@ -46,13 +46,33 @@ export async function removeWorktree(repo: string, worktree: string): Promise<vo
   await git(repo, ['worktree', 'prune']);
 }
 
-/** Stage everything and return the staged diff (respects .gitignore + the per-worktree exclude written by runner.linkOrInstallDeps). */
-export async function stageAndDiff(worktree: string): Promise<{ diff: string; diffStat: string; files: string[] }> {
+/** Delete a local agent branch (never the base branch). The remote branch, if pushed, is left for the human. */
+export async function deleteLocalBranch(repo: string, branch: string): Promise<void> {
+  if (['main', 'master', 'develop'].includes(branch)) throw new Error(`refusing to delete ${branch}`);
+  await git(repo, ['branch', '-D', branch]);
+}
+
+/**
+ * Stage everything and return the diff. Without `baseRef`: only uncommitted work (what a worker just did).
+ * With `baseRef` (e.g. origin/main): everything on the branch, committed or not — what a reviewer should judge.
+ */
+export async function stageAndDiff(worktree: string, baseRef?: string): Promise<{ diff: string; diffStat: string; files: string[] }> {
   await gitOk(worktree, ['add', '-A'], 'add');
-  const diff = (await git(worktree, ['diff', '--cached', '--no-color'])).stdout;
-  const diffStat = (await git(worktree, ['diff', '--cached', '--stat', '--no-color'])).stdout;
-  const files = (await git(worktree, ['diff', '--cached', '--name-only'])).stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+  let from: string[] = [];
+  if (baseRef) {
+    const mb = await git(worktree, ['merge-base', baseRef, 'HEAD']);
+    if (mb.code === 0 && mb.stdout.trim()) from = [mb.stdout.trim()];
+  }
+  const diff = (await git(worktree, ['diff', '--cached', '--no-color', ...from])).stdout;
+  const diffStat = (await git(worktree, ['diff', '--cached', '--stat', '--no-color', ...from])).stdout;
+  const files = (await git(worktree, ['diff', '--cached', '--name-only', ...from])).stdout.split('\n').map((s) => s.trim()).filter(Boolean);
   return { diff, diffStat, files };
+}
+
+/** Number of commits on HEAD that are not on baseRef. */
+export async function commitsAhead(worktree: string, baseRef: string): Promise<number> {
+  const r = await git(worktree, ['rev-list', '--count', `${baseRef}..HEAD`]);
+  return r.code === 0 ? Number(r.stdout.trim()) || 0 : 0;
 }
 
 export async function commitAll(worktree: string, message: string): Promise<string | null> {

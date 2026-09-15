@@ -8,11 +8,15 @@ export interface ExecutorInput {
   resumeId?: string;
 }
 
+import type { UsageLimit } from '../claude-cli.ts';
+
 export interface ExecutorResult {
   ok: boolean;
   summary: string;
   sessionId?: string;
   error?: string;
+  /** The worker's subscription usage limit was hit; the job should pause and retry later. */
+  limit?: UsageLimit;
   /** Unified diff of everything the worker changed (staged by the executor). */
   diff: string;
   diffStat: string;

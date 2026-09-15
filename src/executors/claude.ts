@@ -1,5 +1,5 @@
 // Claude Code as a drop-in second worker. Same interface as the Cursor executor.
-import { callClaude } from '../claude-cli.ts';
+import { callClaude, detectUsageLimit } from '../claude-cli.ts';
 import { stageAndDiff } from '../git.ts';
 import type { Executor, ExecutorInput, ExecutorResult } from './types.ts';
 
@@ -42,6 +42,8 @@ export const claudeExecutor: Executor = {
       resume: input.resumeId,
     });
     const staged = await stageAndDiff(input.worktree);
+    const limit = res.limit ?? (staged.files.length === 0 ? detectUsageLimit(res.text) : null) ?? undefined;
+    if (limit) return { ok: false, summary: res.text, sessionId: res.sessionId, error: `worker usage limit: ${limit.message}`, limit, ...staged };
     if (!res.ok && !staged.files.length) return { ok: false, summary: res.text, sessionId: res.sessionId, error: res.error, ...staged };
     return { ok: true, summary: res.text, sessionId: res.sessionId, ...staged };
   },

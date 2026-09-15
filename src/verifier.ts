@@ -1,5 +1,5 @@
 // Verifier: separate `claude -p` call that grades the worker's diff + test output against the acceptance criteria.
-import { callClaude, READ_ONLY_TOOLS, WRITE_TOOLS } from './claude-cli.ts';
+import { callClaude, READ_ONLY_TOOLS, WRITE_TOOLS, type UsageLimit } from './claude-cli.ts';
 import { VERIFY_SCHEMA, verifyPrompt, type TicketRef } from './prompts/index.ts';
 import type { Project } from './registry.ts';
 import type { Spec } from './planner.ts';
@@ -22,6 +22,7 @@ export interface VerifierOutcome {
   verdict?: Verdict;
   costUsd?: number;
   error?: string;
+  limit?: UsageLimit;
 }
 
 export async function verify(opts: { project: Project; worktree: string; ticket: TicketRef; spec: Spec; testExit: number | null; testOutput: string; diff: string; diffStat: string }): Promise<VerifierOutcome> {
@@ -38,7 +39,7 @@ export async function verify(opts: { project: Project; worktree: string; ticket:
     timeoutMs: project.verifier.timeoutMin * 60_000,
     appendSystemPrompt: 'You are a strict but fair code reviewer. You never edit files. Answer with the requested structured output only.',
   });
-  if (!res.ok || !res.output) return { ok: false, error: res.error ?? 'verifier returned nothing', costUsd: res.costUsd };
+  if (!res.ok || !res.output) return { ok: false, error: res.error ?? 'verifier returned nothing', costUsd: res.costUsd, limit: res.limit };
   const v = res.output;
   if (v.verdict !== 'pass' && v.verdict !== 'fail') return { ok: false, error: `verifier bad verdict ${v.verdict}`, costUsd: res.costUsd };
   if (v.verdict === 'fail' && !v.fixInstructions?.trim()) v.fixInstructions = v.summary || 'Verifier failed the attempt without instructions; re-read the acceptance criteria and address every unmet one.';

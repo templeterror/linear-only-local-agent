@@ -141,6 +141,14 @@
           </div>
           <label><input type="checkbox" name="approvalGate" /> approval gate — wait for <code>approve</code> on the ticket before opening a PR</label>
           <label><input type="checkbox" name="screenshots" /> boot dev server and post a screenshot preview</label>
+          <div class="actions" style="margin-top:6px">
+            <span class="hint" id="previewAuthState">Preview login: …</span>
+            <button class="btn ghost" id="previewLoginStart">Log in for previews</button>
+            <button class="btn" id="previewLoginFinish" hidden>I'm logged in — save session</button>
+            <button class="btn ghost" id="previewLoginCancel" hidden>Cancel</button>
+            <span id="previewLoginMsg" class="msg"></span>
+          </div>
+          <div class="hint" style="margin-top:2px">If your app needs a login, do it once here: a browser window opens on your dev server, you sign in, the session is saved locally and replayed for every screenshot.</div>
           <label><input type="checkbox" name="supabase.applyToDev" /> apply migrations to the <b>dev</b> Supabase project via Cursor's Supabase MCP</label>
           <div class="actions">
             <button class="btn" id="saveBtn">Save config</button>
@@ -180,7 +188,7 @@ const api = async (method, path, body) => {
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
 };
-const msg = (el, text, bad) => { el.textContent = text; el.className = 'msg' + (bad ? ' bad' : ''); if (!bad) setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 4000); };
+const msg = (el, text, bad, sticky) => { el.textContent = text; el.className = 'msg' + (bad ? ' bad' : ''); if (!bad && !sticky) setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 4000); };
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const ago = (iso) => { const s = (Date.now() - new Date(iso)) / 1000; return s < 60 ? `${s | 0}s` : s < 3600 ? `${(s / 60) | 0}m` : s < 86400 ? `${(s / 3600) | 0}h` : `${(s / 86400) | 0}d`; };
 
@@ -287,6 +295,7 @@ function fillForm() {
   fillModelSelect(document.querySelector('[name="worker.model"]'), p.worker.kind, p.worker.model);
   fillModelSelect(document.querySelector('[name="planner.model"]'), 'claude', p.planner.model);
   fillModelSelect(document.querySelector('[name="verifier.model"]'), 'claude', p.verifier.model);
+  loadPreviewAuth();
   $('#enableBtn').textContent = p.enabled ? 'Disable' : 'Enable';
 }
 function readForm() {
@@ -334,6 +343,33 @@ $('#enableBtn').onclick = async () => {
     await loadProjects();
   } catch (e) { msg($('#formMsg'), e.message, true); }
 };
+// ---------- preview login ----------
+async function loadPreviewAuth() {
+  if (!selected) return;
+  try {
+    const s = await api('GET', `/api/preview-login?path=${encodeURIComponent(selected)}`);
+    $('#previewAuthState').textContent = s.inProgress ? `Preview login: browser open at ${s.url} — sign in, then click save` : s.captured ? `Preview login: saved ${s.captured.at.slice(0, 16).replace('T', ' ')} (${s.captured.cookies} cookies, ${s.captured.localStorage} storage keys)` : 'Preview login: not captured (screenshots show the logged-out state)';
+    $('#previewLoginStart').hidden = s.inProgress;
+    $('#previewLoginFinish').hidden = !s.inProgress;
+    $('#previewLoginCancel').hidden = !s.inProgress;
+  } catch (e) { $('#previewAuthState').textContent = 'Preview login: ' + e.message; }
+}
+$('#previewLoginStart').onclick = async () => {
+  $('#previewLoginStart').disabled = true; msg($('#previewLoginMsg'), 'booting dev server + opening browser (can take a minute)…', false, true);
+  try {
+    await api('PUT', '/api/projects/config', { path: selected, config: readForm() });
+    const r = await api('POST', '/api/preview-login/start', { path: selected });
+    msg($('#previewLoginMsg'), `browser opened at ${r.url} — take your time, there is no timeout`, false, true);
+  } catch (e) { msg($('#previewLoginMsg'), e.message, true); }
+  $('#previewLoginStart').disabled = false; loadPreviewAuth();
+};
+$('#previewLoginFinish').onclick = async () => {
+  msg($('#previewLoginMsg'), 'saving session…', false, true);
+  try { const r = await api('POST', '/api/preview-login/finish'); msg($('#previewLoginMsg'), `saved: ${r.cookies} cookies, ${r.localStorage} storage keys`, false, true); } catch (e) { msg($('#previewLoginMsg'), e.message, true); }
+  loadPreviewAuth();
+};
+$('#previewLoginCancel').onclick = async () => { await api('POST', '/api/preview-login/cancel'); loadPreviewAuth(); };
+
 $('#removeBtn').onclick = async () => {
   try { await api('DELETE', `/api/projects?path=${encodeURIComponent(selected)}`); selected = null; await loadProjects(); } catch (e) { msg($('#formMsg'), e.message, true); }
 };

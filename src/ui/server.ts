@@ -8,11 +8,15 @@ import { addProject, removeProject, setEnabled, loadAllProjects, loadProject, de
 import { Linear } from '../linear.ts';
 import { doctor } from '../doctor.ts';
 import { listModels } from '../models.ts';
+import { bootDevServer, conventionalPort } from '../runner.ts';
+import { beginAuthCapture, saveAuth, loadAuth, type AuthCapture } from '../browser.ts';
 import type { Db } from '../db.ts';
 import type { Daemon } from '../daemon.ts';
 import { log } from '../log.ts';
 
 const HTML = path.join(path.dirname(fileURLToPath(import.meta.url)), 'index.html');
+
+let previewLogin: { project: string; path: string; url: string; capture: AuthCapture; stopServer: () => Promise<void>; startedAt: number } | null = null;
 
 type Handler = (req: http.IncomingMessage, url: URL, body: any) => Promise<unknown>;
 
@@ -70,6 +74,53 @@ export function startUi(opts: { port: number; db: Db; daemon: Daemon }): http.Se
       return { ok: true };
     },
     'POST /api/doctor': async (_r, _u, body) => doctor(body?.path ? String(body.path) : undefined),
+
+    // Preview login: boot the dev server from the main checkout, open a visible browser, let the human log in,
+    // then (on /finish) capture cookies + localStorage for screenshot replay.
+    'POST /api/preview-login/start': async (_r, _u, body) => {
+      const p = loadProject(String(body?.path ?? ''));
+      if (previewLogin) throw new HttpError(409, 'a preview login is already in progress — finish or cancel it first');
+      // Use the app's usual port so OAuth/Supabase redirect allow-lists (localhost:3000) work during the login.
+      const boot = await bootDevServer(p, p.path, { preferredPort: conventionalPort(p) });
+      if (!boot.ok) throw new HttpError(500, `dev server failed: ${boot.error}\n${boot.devOutput.slice(-500)}`);
+      const url = boot.server.baseUrl + (p.commands.devReadyPath || '/');
+      let capture: AuthCapture;
+      try {
+        capture = await beginAuthCapture(url); // browser launch + DevTools attach; errors surface here, not at save time
+      } catch (e: any) {
+        await boot.server.kill();
+        throw new HttpError(500, `could not open the browser: ${e.message}`);
+      }
+      previewLogin = { project: p.name, path: p.path, url, capture, stopServer: boot.server.kill, startedAt: Date.now() };
+      log('ui', `preview login started for ${p.name} at ${url}`);
+      return { ok: true, url };
+    },
+    'POST /api/preview-login/finish': async () => {
+      if (!previewLogin) throw new HttpError(400, 'no preview login in progress');
+      const pl = previewLogin;
+      previewLogin = null;
+      try {
+        const state = await pl.capture.finish();
+        const file = saveAuth(pl.project, state);
+        log('ui', `preview login saved for ${pl.project}: ${state.cookies.length} cookies, ${Object.keys(state.localStorage).length} localStorage keys`);
+        return { ok: true, file, cookies: state.cookies.length, localStorage: Object.keys(state.localStorage).length };
+      } finally {
+        await pl.stopServer();
+      }
+    },
+    'POST /api/preview-login/cancel': async () => {
+      if (!previewLogin) return { ok: true };
+      const pl = previewLogin;
+      previewLogin = null;
+      await pl.capture.cancel().catch(() => null);
+      await pl.stopServer();
+      return { ok: true };
+    },
+    'GET /api/preview-login': async (_r, url) => {
+      const p = loadProject(url.searchParams.get('path') ?? '');
+      const auth = loadAuth(p.name);
+      return { inProgress: previewLogin?.path === p.path, url: previewLogin?.path === p.path ? previewLogin.url : null, captured: auth ? { at: auth.capturedAt, cookies: auth.cookies.length, localStorage: Object.keys(auth.localStorage).length } : null };
+    },
     'GET /api/models': async (_r, url) => listModels(url.searchParams.get('kind') === 'cursor' ? 'cursor' : 'claude'),
     'GET /api/linear/teams': async () => linear().teams(),
     'GET /api/linear/states': async (_r, url) => linear().states(url.searchParams.get('team') ?? ''),

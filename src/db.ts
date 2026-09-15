@@ -14,6 +14,10 @@ export interface Job {
   attempt: number;
   /** Per-ticket worker override from a `worker:<kind>` label; null = project default. */
   workerKind: 'cursor' | 'claude' | null;
+  /** ISO time before which the daemon must not run this job (usage-limit pause). */
+  retryAfter: string | null;
+  /** 1 once the trigger label was removed from a finished job; re-adding the label then restarts it. */
+  archived: number | null;
   worktree: string | null;
   branch: string | null;
   plannerSessionId: string | null;
@@ -51,6 +55,8 @@ const COLS: Record<keyof Job, string> = {
   state: 'state',
   attempt: 'attempt',
   workerKind: 'worker_kind',
+  retryAfter: 'retry_after',
+  archived: 'archived',
   worktree: 'worktree',
   branch: 'branch',
   plannerSessionId: 'planner_session_id',
@@ -80,6 +86,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   state TEXT NOT NULL,
   attempt INTEGER NOT NULL DEFAULT 0,
   worker_kind TEXT,
+  retry_after TEXT,
+  archived INTEGER,
   worktree TEXT,
   branch TEXT,
   planner_session_id TEXT,
@@ -139,7 +147,7 @@ export class Db {
   private migrate(): void {
     const cols = new Set((this.db.prepare('PRAGMA table_info(jobs)').all() as any[]).map((r) => r.name));
     for (const [k, col] of Object.entries(COLS)) {
-      if (!cols.has(col)) this.db.exec(`ALTER TABLE jobs ADD COLUMN ${col} ${k === 'attempt' || k === 'testPassed' ? 'INTEGER' : 'TEXT'}`);
+      if (!cols.has(col)) this.db.exec(`ALTER TABLE jobs ADD COLUMN ${col} ${['attempt', 'testPassed', 'archived'].includes(k) ? 'INTEGER' : 'TEXT'}`);
     }
   }
 
@@ -204,6 +212,32 @@ export class Db {
     this.updateJob(issueId, patch);
     this.db.prepare('UPDATE jobs SET state = ?, updated_at = ? WHERE issue_id = ?').run(to, now, issueId);
     this.db.prepare('INSERT INTO events (issue_id, from_state, to_state, note, at) VALUES (?, ?, ?, ?, ?)').run(issueId, job.state, to, note ?? null, now);
+    return this.getJob(issueId)!;
+  }
+
+  /** Human-commanded jump to a state, bypassing the transition table (e.g. failed → building for "try again"). */
+  forceState(issueId: string, to: State, note: string, patch: Partial<Omit<Job, 'issueId' | 'state' | 'createdAt'>> = {}): Job {
+    const job = this.getJob(issueId);
+    if (!job) throw new Error(`no job ${issueId}`);
+    const now = new Date().toISOString();
+    this.updateJob(issueId, patch);
+    this.db.prepare('UPDATE jobs SET state = ?, updated_at = ? WHERE issue_id = ?').run(to, now, issueId);
+    this.db.prepare('INSERT INTO events (issue_id, from_state, to_state, note, at) VALUES (?, ?, ?, ?, ?)').run(issueId, job.state, to, note, now);
+    return this.getJob(issueId)!;
+  }
+
+  /** Start a finished (failed/declined) job over from `queued`, keeping its worktree and history. */
+  resetJob(issueId: string, note: string): Job {
+    const job = this.getJob(issueId);
+    if (!job) throw new Error(`no job ${issueId}`);
+    const now = new Date().toISOString();
+    this.db
+      .prepare(
+        `UPDATE jobs SET state = 'queued', attempt = 0, error = NULL, fix_instructions = NULL, retry_after = NULL, archived = 0,
+         planner_session_id = NULL, worker_session_id = NULL, spec_json = NULL, pr_url = NULL, updated_at = ? WHERE issue_id = ?`,
+      )
+      .run(now, issueId);
+    this.db.prepare('INSERT INTO events (issue_id, from_state, to_state, note, at) VALUES (?, ?, ?, ?, ?)').run(issueId, job.state, 'queued', note, now);
     return this.getJob(issueId)!;
   }
 

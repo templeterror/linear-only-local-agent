@@ -28,7 +28,7 @@ export const TRANSITIONS: Record<State, readonly State[]> = {
   triaging: ['planning', 'waiting_on_human', 'declined'],
   waiting_on_human: ['planning', 'waiting_on_human', 'declined'],
   planning: ['building'],
-  building: ['testing'],
+  building: ['testing', 'awaiting_approval'], // → awaiting_approval only when a human's change request produced no changes
   testing: ['verifying'],
   verifying: ['awaiting_approval', 'pr_open', 'building'],
   awaiting_approval: ['pr_open', 'building'],

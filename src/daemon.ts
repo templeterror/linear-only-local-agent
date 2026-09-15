@@ -84,23 +84,38 @@ export class Daemon {
     const issues = await linear.candidateIssues(project.linear.teamKey, project.linear.label, project.linear.assigneeOnly ? { assigneeId: this.viewerId! } : {});
     const candidateIds = new Set(issues.map((i) => i.id));
     for (const issue of issues) {
-      if (db.getJob(issue.id)) continue;
+      const existing = db.getJob(issue.id);
       // Optional per-ticket routing: a `worker:claude` / `worker:cursor` label overrides the project's worker.
       const wk = issue.labels.nodes.map((l) => l.name.toLowerCase()).find((n) => n === 'worker:claude' || n === 'worker:cursor')?.slice(7) as 'claude' | 'cursor' | undefined;
+      if (existing) {
+        // Label was removed after a failure/decline and is now back: the human asked for a retry.
+        if (existing.archived && (existing.state === 'failed' || existing.state === 'declined')) {
+          db.resetJob(issue.id, 'retry: label re-added');
+          db.updateJob(issue.id, { workerKind: wk ?? null, title: issue.title, description: issue.description });
+          log('daemon', `${issue.identifier} retry requested via label`);
+        }
+        continue;
+      }
       db.createJob({ issueId: issue.id, identifier: issue.identifier, title: issue.title, description: issue.description, url: issue.url, projectPath: project.path, workerKind: wk ?? null });
       log('daemon', `new job ${issue.identifier} "${issue.title}" (${project.name}${wk ? `, worker=${wk}` : ''})`);
     }
 
-    // 2. Cancellation: label removed or issue closed while we were not in a terminal state.
+    // 2. Label removed / issue closed: cancel active jobs; mark finished ones so a re-added label restarts them.
     for (const job of db.listJobs({ projectPath: project.path })) {
-      if (TERMINAL_STATES.includes(job.state) || candidateIds.has(job.issueId) || this.inFlight.has(job.issueId)) continue;
+      if (candidateIds.has(job.issueId) || this.inFlight.has(job.issueId)) continue;
+      if (TERMINAL_STATES.includes(job.state)) {
+        if (!job.archived) db.updateJob(job.issueId, { archived: 1 });
+        continue;
+      }
       // Jobs we moved to the review state stay candidates (label is still on); only real removals land here.
-      db.transition(job.issueId, 'declined', 'label removed or issue closed in Linear');
+      db.transition(job.issueId, 'declined', 'label removed or issue closed in Linear', { archived: 1 });
       log('daemon', `${job.identifier} cancelled (label removed / issue closed)`);
     }
 
-    // 3. Human replies on idle jobs.
-    for (const job of db.listJobs({ projectPath: project.path, states: IDLE_STATES })) {
+    // 3. Human replies: idle jobs (question / approval), finished jobs still carrying the label, and paused jobs
+    //    (usage limit) — so `-tryagain-` / `-startover-` can release or restart them.
+    const listening = db.listJobs({ projectPath: project.path }).filter((j) => IDLE_STATES.includes(j.state) || (TERMINAL_STATES.includes(j.state) && candidateIds.has(j.issueId)) || (ACTIVE_STATES.includes(j.state) && !!j.retryAfter));
+    for (const job of listening) {
       if (this.inFlight.has(job.issueId)) continue;
       const comments = await linear.comments(job.issueId);
       const fresh = comments.filter((c) => !db.isSeen(c.id));
@@ -113,9 +128,15 @@ export class Daemon {
     // 4. Dispatch active steps within the concurrency cap.
     const busy = db.listJobs({ projectPath: project.path }).filter((j) => this.inFlight.has(j.issueId)).length;
     let slots = Math.max(0, project.concurrency - busy);
+    const now = new Date().toISOString();
     for (const job of db.listJobs({ projectPath: project.path, states: ACTIVE_STATES })) {
       if (slots <= 0) break;
       if (this.inFlight.has(job.issueId)) continue;
+      if (job.retryAfter) {
+        if (job.retryAfter > now) continue; // paused on a usage limit
+        db.updateJob(job.issueId, { retryAfter: null });
+        log('daemon', `${job.identifier} resuming ${job.state} after pause`);
+      }
       this.launch(job.issueId, () => runStep(ctx, job.issueId));
       slots--;
     }

@@ -24,6 +24,51 @@ export interface ClaudeResult<T> {
   costUsd?: number;
   error?: string;
   subtype?: string;
+  /** Set when the call failed because the subscription's usage limit was hit; the job should pause, not fail. */
+  limit?: UsageLimit;
+}
+
+export interface UsageLimit {
+  message: string;
+  /** When the limit resets, if the message said so; null → caller picks a default backoff. */
+  retryAt: Date | null;
+}
+
+// Only the phrasings the CLIs actually use for a subscription cap. Deliberately no generic "rate limit" —
+// a worker legitimately describing a rate-limited endpoint it built must not pause the job.
+const LIMIT_RE = /(you'?ve hit your (session|usage|weekly|daily|monthly|5-hour) limit|hit your (session|usage) limit|usage limit (reached|exceeded)|you'?ve reached your (usage|session|weekly|daily) limit|out of (usage|credits))/i;
+
+/**
+ * Recognise a subscription usage-limit message in a CLI's text output (Claude Code or Cursor).
+ * A real limit reply is a short message; anything long is model output that merely mentions limits.
+ */
+export function detectUsageLimit(text: string | undefined | null): UsageLimit | null {
+  if (!text) return null;
+  const t = text.trim();
+  if (t.length > 500 || !LIMIT_RE.test(t)) return null;
+  const line = t.split('\n').find((l) => LIMIT_RE.test(l)) ?? t;
+  return { message: line.trim().slice(0, 200), retryAt: parseResetTime(t) };
+}
+
+/** "resets 5:20pm (America/New_York)" → the next moment that wall-clock time occurs in that zone. */
+function parseResetTime(text: string): Date | null {
+  const m = text.match(/resets?\s*(?:at\s*)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:\(([A-Za-z_]+\/[A-Za-z_+-]+)\))?/i);
+  if (!m) return null;
+  let h = Number(m[1]);
+  const min = Number(m[2] ?? 0);
+  const ap = m[3]?.toLowerCase();
+  if (ap === 'pm' && h < 12) h += 12;
+  if (ap === 'am' && h === 12) h = 0;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: m[4] || undefined, hour: 'numeric', minute: 'numeric', hourCycle: 'h23' }).formatToParts(new Date());
+    const nowH = Number(parts.find((p) => p.type === 'hour')!.value) % 24;
+    const nowM = Number(parts.find((p) => p.type === 'minute')!.value);
+    let delta = h * 60 + min - (nowH * 60 + nowM);
+    if (delta < 0) delta += 24 * 60;
+    return new Date(Date.now() + (delta + 1) * 60_000);
+  } catch {
+    return null;
+  }
 }
 
 /** Read-only tool set used by planner and verifier. */
@@ -76,6 +121,9 @@ async function callClaudeOnce<T = unknown>(opts: ClaudeCallOpts): Promise<Claude
   // total_cost_usd is Claude Code's API-equivalent estimate — informational only on a subscription.
   log('claude', `done in ${dur}s subtype=${parsed.subtype} est=$${costUsd?.toFixed(3) ?? '?'} session=${sessionId ?? '?'}`);
 
+  // A subscription usage limit comes back as a "successful" text answer with no structured output.
+  const limit = parsed.structured_output === undefined ? detectUsageLimit(String(parsed.result ?? '')) : null;
+  if (limit) return { ok: false, text: String(parsed.result ?? ''), sessionId, costUsd, subtype: parsed.subtype, limit, error: `claude usage limit: ${limit.message}` };
   if (parsed.is_error || (parsed.subtype && parsed.subtype !== 'success')) {
     return { ok: false, text: String(parsed.result ?? ''), sessionId, costUsd, subtype: parsed.subtype, error: `claude ${parsed.subtype ?? 'error'}: ${String(parsed.result ?? '').slice(0, 400)}` };
   }

@@ -49,6 +49,8 @@ Then in the UI:
 
 Or from the CLI: `linear-agent add <path>` → edit `<path>/.linear-agent.json` → `linear-agent doctor <path>` → `linear-agent enable <path>`.
 
+6. If your app needs a login to show anything useful, click **Log in for previews** once: a browser opens on your dev server, you sign in, the session (cookies + localStorage) is saved under `~/.linear-agent/preview-auth/` and replayed for every screenshot.
+
 Now add the `agent` label to a ticket and watch the **Jobs** tab (or `linear-agent status`).
 
 ## Per-project config (`.linear-agent.json`)
@@ -80,7 +82,12 @@ Now add the `agent` label to a ticket and watch the **Jobs** tab (or `linear-age
 | `building` → `testing` → `verifying` | (worker runs; verifier may post *retry n/2* with fix instructions) |
 | `awaiting_approval` | 🤖 **ready for review**: screenshot, criteria ✅/⚠️, diff stat, migration SQL, test output. Reply `approve` → PR. Anything else → sent back to the worker as change requests. |
 | `pr_open` | 🤖 **PR opened** + link attached, issue moved to your review state |
-| `failed` | 🤖 **failed** with details. Remove and re-add the label to retry. |
+| `failed` / `declined` | 🤖 **failed** / **declined** with details. Reply **`-tryagain-`** or **`-startover-`** (after editing the ticket if needed). |
+
+Two commands work in any state where the daemon is listening (question, review, failed, declined):
+
+- **`-tryagain-`** — same worktree and branch, redo from the build step (re-triage if there is no plan yet).
+- **`-startover-`** — delete the worktree and local branch, fresh triage and plan.
 
 Remove the label at any time to cancel.
 
