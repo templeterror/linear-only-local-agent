@@ -6,7 +6,7 @@ import { getLinearApiKey } from './config.ts';
 import { loadEnabledProjects, type Project } from './registry.ts';
 import { ACTIVE_STATES, IDLE_STATES, TERMINAL_STATES } from './state.ts';
 import { isAgentComment } from './comments.ts';
-import { runStep, handleHumanComment, type Ctx } from './steps.ts';
+import { runStep, handleHumanComment, isCommand, type Ctx } from './steps.ts';
 import { killAllChildren } from './proc.ts';
 import { log } from './log.ts';
 
@@ -112,15 +112,19 @@ export class Daemon {
       log('daemon', `${job.identifier} cancelled (label removed / issue closed)`);
     }
 
-    // 3. Human replies: idle jobs (question / approval), finished jobs still carrying the label, and paused jobs
-    //    (usage limit) — so `-tryagain-` / `-startover-` can release or restart them.
-    const listening = db.listJobs({ projectPath: project.path }).filter((j) => IDLE_STATES.includes(j.state) || (TERMINAL_STATES.includes(j.state) && candidateIds.has(j.issueId)) || (ACTIVE_STATES.includes(j.state) && !!j.retryAfter));
+    // 3. Human replies: idle jobs (question / plan approval / PR approval), finished jobs still carrying the label,
+    //    paused jobs (usage limit), and — for the explicit commands only — jobs between two active steps, so
+    //    `-approveplan-` can pre-approve a plan while triage is still running.
+    const listening = db.listJobs({ projectPath: project.path }).filter((j) => IDLE_STATES.includes(j.state) || ACTIVE_STATES.includes(j.state) || (TERMINAL_STATES.includes(j.state) && candidateIds.has(j.issueId)));
     for (const job of listening) {
       if (this.inFlight.has(job.issueId)) continue;
+      const midStep = ACTIVE_STATES.includes(job.state) && !job.retryAfter;
       const comments = await linear.comments(job.issueId);
       const fresh = comments.filter((c) => !db.isSeen(c.id));
-      const human = fresh.filter((c) => !isAgentComment(c.body) && !db.isAgentComment(c.id) && c.createdAt > job.createdAt && !c.botActor);
-      for (const c of fresh) db.markSeen(job.issueId, c.id);
+      let human = fresh.filter((c) => !isAgentComment(c.body) && !db.isAgentComment(c.id) && c.createdAt > job.createdAt && !c.botActor);
+      if (midStep) human = human.filter((c) => isCommand(c.body));
+      // Mid-step, ordinary comments stay unseen so they are handled at the next idle state (e.g. as change requests).
+      for (const c of midStep ? human : fresh) db.markSeen(job.issueId, c.id);
       const latest = human[human.length - 1];
       if (latest) this.launch(job.issueId, () => handleHumanComment(ctx, job.issueId, latest));
     }

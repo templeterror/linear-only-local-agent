@@ -13,7 +13,11 @@ const wrap = (title: string, body: string) => `${HEADER} · ${title}\n\n${body}`
 const RETRY_HINT = '_Reply **`-tryagain-`** to redo the build in the same worktree, or **`-startover-`** for a fresh worktree and a new plan (edit the ticket first if it needs changes). Remove the label to drop it._';
 
 export const fmt = {
-  pickedUp: (projectName: string) => wrap('picked up', `Working on this in \`${projectName}\`. I'll triage it, write a spec, build it in an isolated worktree, run tests locally, verify, and post a preview here.`),
+  pickedUp: (projectName: string, planGate: boolean) =>
+    wrap(
+      'picked up',
+      `Working on this in \`${projectName}\`. I'll triage it, write a plan, ${planGate ? 'wait for your approval on the plan, ' : ''}build it in an isolated worktree, run tests locally, verify, and post a preview here.${planGate ? '\n\n_Reply **`-approveplan-`** now to skip the plan review and build as soon as the plan is ready._' : ''}`,
+    ),
 
   question: (question: string) => wrap('question', `${question}\n\n_Reply in a comment and I'll continue from where I left off. (\`-startover-\` re-plans from scratch.)_`),
 
@@ -28,9 +32,9 @@ export const fmt = {
   noChanges: (summary: string) =>
     wrap('no changes made', `The worker didn't change anything in response to that request. Its explanation:\n\n> ${summary.trim().slice(0, 1500).replace(/\n/g, '\n> ')}\n\nThe previous build is still on the branch. Reply with different instructions, or \`approve\` to open the PR as is.`),
 
-  spec: (spec: Spec, branch: string, worker: string) =>
+  spec: (spec: Spec, branch: string, worker: string, opts: { gate: boolean; revised: boolean }) =>
     wrap(
-      'plan',
+      opts.revised ? 'revised plan' : 'plan',
       [
         `**Branch:** \`${branch}\` · **worker:** ${worker} · **planner/verifier:** Claude Code`,
         '',
@@ -43,6 +47,28 @@ export const fmt = {
         ...spec.acceptanceCriteria.map((c) => `- [ ] ${c}`),
         spec.filesLikelyTouched?.length ? `\n**Files likely touched:** ${spec.filesLikelyTouched.map((f) => `\`${f}\``).join(', ')}` : '',
         spec.needsMigration ? '\n⚠️ This change needs a database migration. SQL will be posted here before any PR is opened.' : '',
+        '',
+        opts.gate ? '**Reply `approve` to start the build.** Anything else is taken as feedback on the plan and I will post a revised one. `-startover-` re-plans from scratch.' : 'Starting the build now.',
+      ].join('\n'),
+    ),
+
+  planApproved: () => wrap('plan approved', 'Starting the build.'),
+
+  planPreApproved: () => wrap('plan pre-approved', "Got it — I'll start building as soon as the plan is ready, without waiting for a review."),
+
+  planChangesRequested: (text: string) => wrap('revising the plan', `Taking this back to the planner:\n\n> ${text.trim().replace(/\n/g, '\n> ')}`),
+
+  built: (p: { attempt: number; diffStat: string; summary: string }) =>
+    wrap(
+      `built (attempt ${p.attempt})`,
+      [
+        '**Changes:**',
+        '```',
+        p.diffStat.trim() || '(no diff)',
+        '```',
+        p.summary.trim() ? `\n<details><summary>Worker summary</summary>\n\n${p.summary.trim().slice(0, 3000)}\n</details>` : '',
+        '',
+        '_Running tests and the verifier next._',
       ].join('\n'),
     ),
 

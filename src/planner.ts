@@ -1,7 +1,7 @@
 // Planner: one `claude -p` session per ticket that triages and writes the spec.
 // A clarification reply resumes the same session so repo context is retained.
 import { callClaude, READ_ONLY_TOOLS, WRITE_TOOLS, type UsageLimit } from './claude-cli.ts';
-import { TRIAGE_SCHEMA, triagePrompt, triageResumePrompt, type TicketRef } from './prompts/index.ts';
+import { TRIAGE_SCHEMA, triagePrompt, triageResumePrompt, planFeedbackPrompt, planFeedbackAsDescription, type TicketRef } from './prompts/index.ts';
 import type { Project } from './registry.ts';
 
 export interface Spec {
@@ -77,8 +77,18 @@ export async function triage(project: Project, ticket: TicketRef): Promise<Plann
 }
 
 export async function resumeTriage(project: Project, sessionId: string, reply: string): Promise<PlannerOutcome> {
+  return resumeWith(project, sessionId, triageResumePrompt(reply));
+}
+
+/** Plan feedback: resume the planner session with the developer's requested changes; fall back to a fresh triage if the session is gone. */
+export async function revisePlan(project: Project, sessionId: string | null, ticket: TicketRef, feedback: string, previous: Spec): Promise<PlannerOutcome> {
+  if (sessionId) return resumeWith(project, sessionId, planFeedbackPrompt(feedback, previous));
+  return triage(project, { ...ticket, description: planFeedbackAsDescription(ticket.description, feedback, previous) });
+}
+
+async function resumeWith(project: Project, sessionId: string, prompt: string): Promise<PlannerOutcome> {
   const res = await callClaude<TriageResult>({
-    prompt: triageResumePrompt(reply),
+    prompt,
     cwd: project.path,
     schema: TRIAGE_SCHEMA,
     model: project.planner.model,

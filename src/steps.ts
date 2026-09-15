@@ -7,7 +7,7 @@ import type { Db, Job } from './db.ts';
 import type { Linear, LinearComment } from './linear.ts';
 import type { Project } from './registry.ts';
 import { fmt } from './comments.ts';
-import { triage, resumeTriage, type PlannerOutcome, type Spec } from './planner.ts';
+import { triage, resumeTriage, revisePlan, type PlannerOutcome, type Spec } from './planner.ts';
 import { verify } from './verifier.ts';
 import { getExecutor } from './executors/index.ts';
 import type { UsageLimit } from './claude-cli.ts';
@@ -89,7 +89,7 @@ export async function runStep(ctx: Ctx, issueId: string): Promise<void> {
 }
 
 async function stepQueued(ctx: Ctx, job: Job): Promise<void> {
-  await post(ctx, job, fmt.pickedUp(ctx.project.name));
+  await post(ctx, job, fmt.pickedUp(ctx.project.name, ctx.project.planApprovalGate && !job.planApproved));
   ctx.db.transition(job.issueId, 'triaging');
 }
 
@@ -105,7 +105,8 @@ async function applyTriage(ctx: Ctx, job: Job, out: PlannerOutcome): Promise<voi
     await post(ctx, job, fmt.question(r.question));
     ctx.db.transition(job.issueId, 'waiting_on_human', 'asked: ' + r.question.slice(0, 120), patch);
   } else {
-    ctx.db.transition(job.issueId, 'planning', r.reason.slice(0, 200), { ...patch, specJson: JSON.stringify(r.spec) });
+    // planPosted 0 (not null) marks a spec that replaces an earlier posted one, so the next plan comment says "revised".
+    ctx.db.transition(job.issueId, 'planning', r.reason.slice(0, 200), { ...patch, specJson: JSON.stringify(r.spec), planPosted: job.planPosted ? 0 : job.planPosted });
   }
 }
 
@@ -130,17 +131,21 @@ async function stepPlanning(ctx: Ctx, job: Job): Promise<void> {
   const { project } = ctx;
   const branch = job.branch ?? branchFor(project, job);
   const worktree = job.worktree ?? path.join(PATHS.worktrees, project.name, job.identifier);
-  const firstTime = !job.worktree;
   const wt = await ensureWorktree({ repo: project.path, worktree, branch, base: project.git.baseBranch, remote: project.git.remote });
   log(job.identifier, `worktree ${wt.created ? 'created' : 'reused'} at ${worktree} on ${branch}`);
   const deps = await linkOrInstallDeps(project, worktree);
   if (!deps.ok) return fail(ctx, job, 'dependency install failed in worktree', deps.output);
   ctx.db.updateJob(job.issueId, { worktree, branch });
-  if (firstTime) {
+  // Re-read: a `-approveplan-` comment may have landed while the worktree was being prepared.
+  job = ctx.db.getJob(job.issueId)!;
+  const gate = project.planApprovalGate && !job.planApproved;
+  if (!job.planPosted) {
     const w = workerFor(project, job);
-    await post(ctx, job, fmt.spec(specOf(job), branch, `${w.kind} (${w.model})`));
+    await post(ctx, job, fmt.spec(specOf(job), branch, `${w.kind} (${w.model})`, { gate, revised: job.planPosted === 0 }));
+    ctx.db.updateJob(job.issueId, { planPosted: 1 });
   }
-  ctx.db.transition(job.issueId, 'building', `deps: ${deps.method}`);
+  if (gate) ctx.db.transition(job.issueId, 'awaiting_plan_approval', `deps: ${deps.method}; waiting for plan approval`);
+  else ctx.db.transition(job.issueId, 'building', `deps: ${deps.method}${job.planApproved ? '; plan pre-approved' : ''}`);
 }
 
 async function stepBuilding(ctx: Ctx, job: Job): Promise<void> {
@@ -173,6 +178,7 @@ async function stepBuilding(ctx: Ctx, job: Job): Promise<void> {
     ctx.db.transition(job.issueId, 'awaiting_approval', 'change request produced no changes', { fixInstructions: null });
     return;
   }
+  await post(ctx, job, fmt.built({ attempt: job.attempt + 1, diffStat: res.diffStat, summary: res.summary }));
   ctx.db.transition(job.issueId, 'testing', `${res.files.length} files changed`, { migrationSql: extractMigrationSql(res.diff) || job.migrationSql, fixInstructions: null });
 }
 
@@ -291,6 +297,32 @@ const APPROVE_RE = /^\s*(approve[d]?|lgtm|ship( it)?|:shipit:|✅|👍|yes,? (op
 const RETRY_RE = /^\s*\\?-tryagain\\?-\s*$/i;
 /** `-startover-`: fresh worktree, fresh triage. */
 const START_OVER_RE = /^\s*\\?-startover\\?-\s*$/i;
+/** `-approveplan-`: approve the plan at the gate, or pre-approve it any time earlier so the build starts unattended. */
+const APPROVE_PLAN_RE = /^\s*\\?-approveplan\\?-\s*$/i;
+
+/** True for comments the daemon acts on even while a job is mid-step (checked between steps). */
+export function isCommand(text: string): boolean {
+  const t = text.trim();
+  return START_OVER_RE.test(t) || RETRY_RE.test(t) || APPROVE_PLAN_RE.test(t);
+}
+
+/** Plan approval: at the gate it starts the build; before the gate it records a pre-approval; later it is a no-op. */
+async function approvePlan(ctx: Ctx, job: Job): Promise<void> {
+  if (job.state === 'awaiting_plan_approval') {
+    await post(ctx, job, fmt.planApproved());
+    ctx.db.transition(job.issueId, 'building', 'plan approved by human', { planApproved: 1, attempt: 0, fixInstructions: null });
+    log(job.identifier, 'plan approved');
+  } else if (['queued', 'triaging', 'planning', 'waiting_on_human'].includes(job.state)) {
+    if (!job.planApproved) {
+      ctx.db.updateJob(job.issueId, { planApproved: 1 });
+      ctx.db.addEvent(job.issueId, 'plan pre-approved by human');
+      await post(ctx, job, fmt.planPreApproved());
+    }
+    log(job.identifier, 'plan pre-approved');
+  } else {
+    log(job.identifier, `-approveplan- ignored in ${job.state}`);
+  }
+}
 
 /** `try again`: keep the worktree/branch, go back to building (or triaging if there is no spec yet). */
 async function tryAgain(ctx: Ctx, job: Job): Promise<void> {
@@ -332,11 +364,19 @@ export async function handleHumanComment(ctx: Ctx, issueId: string, comment: Lin
     // Explicit commands work in every state the daemon listens in.
     if (START_OVER_RE.test(text)) return await startOver(ctx, job);
     if (RETRY_RE.test(text)) return await tryAgain(ctx, job);
+    if (APPROVE_PLAN_RE.test(text)) return await approvePlan(ctx, job);
+    // Mid-step (not paused): only the explicit commands above act; anything else waits for the next idle state.
+    if (ACTIVE_STATES.includes(job.state) && !job.retryAfter) return;
 
     if (job.state === 'waiting_on_human') {
       const out = job.plannerSessionId
         ? await resumeTriage(ctx.project, job.plannerSessionId, text)
         : await triage(ctx.project, { ...ticketOf(job), description: `${job.description ?? ''}\n\nDeveloper clarification:\n${text}` });
+      await applyTriage(ctx, job, out);
+    } else if (job.state === 'awaiting_plan_approval') {
+      if (APPROVE_RE.test(text)) return await approvePlan(ctx, job);
+      await post(ctx, job, fmt.planChangesRequested(text));
+      const out = await revisePlan(ctx.project, job.plannerSessionId, ticketOf(job), text, specOf(job));
       await applyTriage(ctx, job, out);
     } else if (job.state === 'awaiting_approval') {
       if (APPROVE_RE.test(text)) {

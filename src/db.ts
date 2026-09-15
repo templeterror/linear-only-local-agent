@@ -18,6 +18,10 @@ export interface Job {
   retryAfter: string | null;
   /** 1 once the trigger label was removed from a finished job; re-adding the label then restarts it. */
   archived: number | null;
+  /** 1 once the human approved the plan (or pre-approved it with `-approveplan-`). */
+  planApproved: number | null;
+  /** 1 once the current spec has been posted as a plan comment; reset to 0 when the plan is revised. */
+  planPosted: number | null;
   worktree: string | null;
   branch: string | null;
   plannerSessionId: string | null;
@@ -57,6 +61,8 @@ const COLS: Record<keyof Job, string> = {
   workerKind: 'worker_kind',
   retryAfter: 'retry_after',
   archived: 'archived',
+  planApproved: 'plan_approved',
+  planPosted: 'plan_posted',
   worktree: 'worktree',
   branch: 'branch',
   plannerSessionId: 'planner_session_id',
@@ -88,6 +94,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   worker_kind TEXT,
   retry_after TEXT,
   archived INTEGER,
+  plan_approved INTEGER,
+  plan_posted INTEGER,
   worktree TEXT,
   branch TEXT,
   planner_session_id TEXT,
@@ -147,7 +155,7 @@ export class Db {
   private migrate(): void {
     const cols = new Set((this.db.prepare('PRAGMA table_info(jobs)').all() as any[]).map((r) => r.name));
     for (const [k, col] of Object.entries(COLS)) {
-      if (!cols.has(col)) this.db.exec(`ALTER TABLE jobs ADD COLUMN ${col} ${['attempt', 'testPassed', 'archived'].includes(k) ? 'INTEGER' : 'TEXT'}`);
+      if (!cols.has(col)) this.db.exec(`ALTER TABLE jobs ADD COLUMN ${col} ${['attempt', 'testPassed', 'archived', 'planApproved', 'planPosted'].includes(k) ? 'INTEGER' : 'TEXT'}`);
     }
   }
 
@@ -234,7 +242,7 @@ export class Db {
     this.db
       .prepare(
         `UPDATE jobs SET state = 'queued', attempt = 0, error = NULL, fix_instructions = NULL, retry_after = NULL, archived = 0,
-         planner_session_id = NULL, worker_session_id = NULL, spec_json = NULL, pr_url = NULL, updated_at = ? WHERE issue_id = ?`,
+         planner_session_id = NULL, worker_session_id = NULL, spec_json = NULL, pr_url = NULL, plan_approved = NULL, plan_posted = NULL, updated_at = ? WHERE issue_id = ?`,
       )
       .run(now, issueId);
     this.db.prepare('INSERT INTO events (issue_id, from_state, to_state, note, at) VALUES (?, ?, ?, ?, ?)').run(issueId, job.state, 'queued', note, now);

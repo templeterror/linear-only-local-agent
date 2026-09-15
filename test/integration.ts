@@ -1,9 +1,9 @@
 // End-to-end integration test with a fake Linear and a local bare git "origin".
 //   npx tsx test/integration.ts            # full run incl. crash-and-restart mid-build (~3-5 min, ~$1 of Claude budget)
 //
-// What it proves: ingest → triage → plan → worktree → worker → tests → screenshot → verify → push → preview comment,
-// that a SIGKILL during `building` leaves the job resumable and no comment is posted twice, and that an `approve`
-// reply is routed to the PR step (which fails here only because the bare repo is not on GitHub).
+// What it proves: ingest → triage → plan → plan gate (feedback → revised plan → approve) → worker → tests → screenshot
+// → verify → push → preview comment, that a SIGKILL during `building` leaves the job resumable and no comment is posted
+// twice, and that an `approve` reply is routed to the PR step (which fails here only because the bare repo is not on GitHub).
 import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
@@ -74,9 +74,26 @@ async function parentMain() {
     return bodies.reduce<Record<string, number>>((acc, b) => ((acc[b] = (acc[b] ?? 0) + 1), acc), {});
   };
 
-  // 1. run until building, then crash the daemon mid-worker
+  // 1. triage + plan → the daemon settles at the plan gate with the plan posted
   let child = spawnChild();
   const t0 = Date.now();
+  assert.equal(await exited(child), 0, 'daemon settled at the plan gate');
+  assert.equal(state(), 'awaiting_plan_approval');
+  assert.ok(Object.keys(commentsByKind()).some((k) => /· plan$/.test(k)), 'plan comment posted');
+  console.log(`[test] plan posted after ${((Date.now() - t0) / 1000).toFixed(0)}s; requesting a plan change`);
+
+  // 1b. plan feedback → planner resumes its session → revised plan → waits again
+  fake.humanComment(issue.id, 'Please also put a data-testid="note-count" on the header element so the test can target it directly.');
+  child = spawnChild();
+  assert.equal(await exited(child), 0, 'daemon settled after plan revision');
+  assert.equal(state(), 'awaiting_plan_approval');
+  assert.ok(Object.keys(commentsByKind()).some((k) => /revised plan/.test(k)), 'revised plan posted');
+  const revised = JSON.parse(db().getJob(issue.id)!.specJson!);
+  console.log(`[test] revised plan: ${revised.summary}`);
+
+  // 1c. approve the plan → building; then crash the daemon mid-worker
+  fake.humanComment(issue.id, 'approve');
+  child = spawnChild();
   await waitFor(() => state() === 'building', 240_000, 'reach building');
   console.log(`[test] reached building after ${((Date.now() - t0) / 1000).toFixed(0)}s; letting the worker run 12s then SIGKILL`);
   await sleep(12_000);
@@ -97,6 +114,7 @@ async function parentMain() {
   console.log('[test] comments after:', after);
   for (const [k, n] of Object.entries(after)) assert.equal(n, 1, `comment "${k}" posted exactly once`);
   assert.ok(Object.keys(after).some((k) => /ready for review/.test(k)), 'preview comment posted');
+  assert.ok(Object.keys(after).some((k) => /built \(attempt 1\)/.test(k)), 'built comment posted');
   // pushed to the bare origin?
   const remoteBranches = execSync(`git --git-dir="${ORIGIN}" branch --list 'agent/*'`).toString().trim();
   assert.match(remoteBranches, /agent\/eng-42/, 'agent branch pushed to origin');

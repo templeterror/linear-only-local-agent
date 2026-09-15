@@ -65,6 +65,8 @@ export interface ProjectFileConfig {
   planner: { model: string; timeoutMin: number; maxBudgetUsd?: number };
   verifier: { model: string; maxRetries: number; timeoutMin: number; maxBudgetUsd?: number };
   supabase: { applyToDev: boolean };
+  /** Wait for `approve` on the posted plan before building. `-approveplan-` on the ticket skips it for one job. */
+  planApprovalGate: boolean;
   approvalGate: boolean;
   concurrency: number;
   pollSeconds: number;
@@ -81,6 +83,7 @@ export const DEFAULT_PROJECT_CONFIG: ProjectFileConfig = {
   planner: { model: 'sonnet', timeoutMin: 6 },
   verifier: { model: 'sonnet', maxRetries: 2, timeoutMin: 6 },
   supabase: { applyToDev: true },
+  planApprovalGate: true,
   approvalGate: true,
   concurrency: 1,
   pollSeconds: 25,

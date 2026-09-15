@@ -55,6 +55,32 @@ ${reply.trim()}
 Continue from your earlier analysis of this repository. Produce the final triage decision and, if automatable, the full spec. Ask another question only if you are still genuinely blocked.`;
 }
 
+/** The developer read the posted plan and asked for changes. Same session, same schema: produce a revised spec. */
+export function planFeedbackPrompt(feedback: string, previous: Spec): string {
+  return `The developer reviewed the plan you wrote for this ticket and asked for changes:
+
+"""
+${feedback.trim()}
+"""
+
+The plan they reviewed was:
+${JSON.stringify(previous, null, 2)}
+
+Revise the plan to incorporate their feedback, keeping everything else that still applies. Re-check the repository where the feedback changes which files or tests are involved. Answer with the full triage output again: decision "automatable" with the complete revised spec (summary, steps, acceptanceCriteria, filesLikelyTouched, previewRoute, needsMigration, testHints). If the feedback makes the ticket out of scope or genuinely ambiguous, say so with the matching decision instead.`;
+}
+
+/** Fallback when the planner session is gone: re-triage from scratch with the feedback attached to the ticket. */
+export function planFeedbackAsDescription(description: string | null, feedback: string, previous: Spec): string {
+  return `${description ?? ''}
+
+---
+A previous plan for this ticket was:
+${JSON.stringify(previous, null, 2)}
+
+The developer asked for these changes to that plan:
+${feedback.trim()}`;
+}
+
 export const TRIAGE_SCHEMA = {
   type: 'object',
   properties: {

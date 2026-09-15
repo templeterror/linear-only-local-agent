@@ -5,6 +5,7 @@ export const STATES = [
   'triaging',
   'waiting_on_human',
   'planning',
+  'awaiting_plan_approval',
   'building',
   'testing',
   'verifying',
@@ -19,7 +20,7 @@ export type State = (typeof STATES)[number];
 /** States where the daemon actively runs a step. */
 export const ACTIVE_STATES: readonly State[] = ['queued', 'triaging', 'planning', 'building', 'testing', 'verifying'];
 /** States where the daemon waits for a human comment on the Linear issue. */
-export const IDLE_STATES: readonly State[] = ['waiting_on_human', 'awaiting_approval'];
+export const IDLE_STATES: readonly State[] = ['waiting_on_human', 'awaiting_plan_approval', 'awaiting_approval'];
 /** No further daemon action. */
 export const TERMINAL_STATES: readonly State[] = ['pr_open', 'failed', 'declined'];
 
@@ -27,7 +28,8 @@ export const TRANSITIONS: Record<State, readonly State[]> = {
   queued: ['triaging'],
   triaging: ['planning', 'waiting_on_human', 'declined'],
   waiting_on_human: ['planning', 'waiting_on_human', 'declined'],
-  planning: ['building'],
+  planning: ['awaiting_plan_approval', 'building'], // → building directly when the plan gate is off or the plan was pre-approved
+  awaiting_plan_approval: ['building', 'planning', 'waiting_on_human', 'declined'], // approve | plan feedback → revised plan | planner asks | planner declines
   building: ['testing', 'awaiting_approval'], // → awaiting_approval only when a human's change request produced no changes
   testing: ['verifying'],
   verifying: ['awaiting_approval', 'pr_open', 'building'],

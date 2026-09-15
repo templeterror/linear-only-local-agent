@@ -10,6 +10,9 @@ No cloud VMs, no environment replication, no per-ticket credits: it runs in the 
  Linear ticket ──label──▶ daemon ──▶ Claude Code (plan + acceptance criteria)
                                         │  clarifying question? → posted on ticket, waits for your reply
                                         ▼
+                                   plan posted on ticket → reply "approve" (or ask for changes → revised plan)
+                                        │  (skip with -approveplan-, or planApprovalGate: false)
+                                        ▼
                                    git worktree  ──▶ Cursor CLI (build, dev-DB migration via Supabase MCP)
                                         │
                                         ▼
@@ -65,6 +68,7 @@ Now add the `agent` label to a ticket and watch the **Jobs** tab (or `linear-age
   "planner":  { "model": "sonnet", "timeoutMin": 6 },                        // Claude Code, on your subscription
   "verifier": { "model": "sonnet", "maxRetries": 2, "timeoutMin": 6 },
   "supabase": { "applyToDev": true },      // worker applies migrations to the DEV project via Cursor's Supabase MCP
+  "planApprovalGate": true,                // false = build as soon as the plan is posted (per ticket: reply `-approveplan-`)
   "approvalGate": true,                    // false = open the PR as soon as the verifier passes
   "concurrency": 1, "pollSeconds": 25, "screenshots": true,
   "testTimeoutMin": 10, "devBootTimeoutSec": 120
@@ -79,13 +83,15 @@ Now add the `agent` label to a ticket and watch the **Jobs** tab (or `linear-age
 | `waiting_on_human` | 🤖 **question** — reply in a comment; the planner resumes its session with full repo context |
 | `declined` | 🤖 **declined** with the reason (auth, payments, destructive SQL, CI/secrets, out of scope) |
 | `planning` | 🤖 **plan**: branch, steps, acceptance criteria |
-| `building` → `testing` → `verifying` | (worker runs; verifier may post *retry n/2* with fix instructions) |
+| `awaiting_plan_approval` | Reply `approve` → build starts. Anything else is feedback on the plan → 🤖 **revised plan**, and it waits again. Reply **`-approveplan-`** any time after pickup to skip this gate for that ticket. |
+| `building` → `testing` → `verifying` | 🤖 **built**: diff stat + worker summary after each build; verifier may post *retry n/2* with fix instructions |
 | `awaiting_approval` | 🤖 **ready for review**: screenshot, criteria ✅/⚠️, diff stat, migration SQL, test output. Reply `approve` → PR. Anything else → sent back to the worker as change requests. |
 | `pr_open` | 🤖 **PR opened** + link attached, issue moved to your review state |
 | `failed` / `declined` | 🤖 **failed** / **declined** with details. Reply **`-tryagain-`** or **`-startover-`** (after editing the ticket if needed). |
 
-Two commands work in any state where the daemon is listening (question, review, failed, declined):
+Three commands work in any state where the daemon is listening (question, plan review, PR review, failed, declined, and between steps):
 
+- **`-approveplan-`** — approve the plan (at the gate) or pre-approve it (earlier), so the build starts without a plan review.
 - **`-tryagain-`** — same worktree and branch, redo from the build step (re-triage if there is no plan yet).
 - **`-startover-`** — delete the worktree and local branch, fresh triage and plan.
 
@@ -120,7 +126,7 @@ State lives in `~/.linear-agent/` (`state.db`, `projects.json`, `.env`, `worktre
 ```
 src/daemon.ts      poll → ingest → route comments → dispatch steps (concurrency cap, in-flight set)
 src/steps.ts       one handler per state; idempotent; every transition audited
-src/state.ts       state machine (queued → triaging → [waiting_on_human] → planning → building → testing → verifying → awaiting_approval → pr_open | failed | declined)
+src/state.ts       state machine (queued → triaging → [waiting_on_human] → planning → [awaiting_plan_approval ⇄] → building → testing → verifying → awaiting_approval → pr_open | failed | declined)
 src/planner.ts     claude -p triage + spec (structured output, resumable session)
 src/verifier.ts    claude -p verdict + fix instructions
 src/executors/     Executor interface: cursor.ts (default), claude.ts (drop-in)

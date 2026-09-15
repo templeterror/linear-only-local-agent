@@ -16,6 +16,7 @@ A daemon on the developer's own machine that makes Linear the only interface for
   (GraphQL)      │                                                                                                          │
                  │  triaging ──▶ claude -p  (read-only tools, --json-schema)  → automatable | question | out_of_scope       │
                  │  planning ──▶ git worktree ~/.linear-agent/worktrees/<proj>/<ID>  branch agent/<id>-<slug>                │
+                 │  awaiting_plan_approval ── "approve" ──▶ building · other reply ──▶ planner revises (same session)        │
                  │  building ──▶ cursor-agent -p --workspace <wt> --force --approve-mcps   (Supabase MCP → dev project)      │
                  │               └─ guards.scanDiff(): .env / CI / destructive SQL / secrets → fail                          │
                  │  testing  ──▶ <test cmd> · <dev cmd> on a free port · headless Chromium screenshot · upload to Linear     │
@@ -31,7 +32,7 @@ A daemon on the developer's own machine that makes Linear the only interface for
 
 ## State machine
 
-`queued → triaging → [waiting_on_human ⇄] → planning → building → testing → verifying → awaiting_approval → pr_open`, plus terminal `failed` and `declined`. Transitions are validated against an explicit table (`src/state.ts`), persisted in SQLite (`~/.linear-agent/state.db`, WAL) with an audit `events` table, and every transition that a human should know about becomes a Linear comment.
+`queued → triaging → [waiting_on_human ⇄] → planning → [awaiting_plan_approval ⇄] → building → testing → verifying → awaiting_approval → pr_open`, plus terminal `failed` and `declined`. Transitions are validated against an explicit table (`src/state.ts`), persisted in SQLite (`~/.linear-agent/state.db`, WAL) with an audit `events` table, and every transition that a human should know about becomes a Linear comment.
 
 Restart safety: the only in-memory state is the set of in-flight jobs. On restart the daemon re-runs the current step of every active job; steps are idempotent (worktree reuse, cheap planner re-call, worker told it may find partial work). Comment IDs are recorded so replies are consumed exactly once and our own comments are never mistaken for human input.
 
