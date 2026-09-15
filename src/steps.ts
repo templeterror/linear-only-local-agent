@@ -297,8 +297,9 @@ const APPROVE_RE = /^\s*(approve[d]?|lgtm|ship( it)?|:shipit:|✅|👍|yes,? (op
 const RETRY_RE = /^\s*\\?-tryagain\\?-\s*$/i;
 /** `-startover-`: fresh worktree, fresh triage. */
 const START_OVER_RE = /^\s*\\?-startover\\?-\s*$/i;
-/** `-approveplan-`: approve the plan at the gate, or pre-approve it any time earlier so the build starts unattended. */
-const APPROVE_PLAN_RE = /^\s*\\?-approveplan\\?-\s*$/i;
+/** `-autobuild-` (or `-approveplan-`): approve the plan at the gate, or pre-approve it any time earlier so the
+ *  agent plans and builds unattended. Same handler; two spellings because they read naturally at different moments. */
+const APPROVE_PLAN_RE = /^\s*\\?-(autobuild|approveplan)\\?-\s*$/i;
 
 /** True for comments the daemon acts on even while a job is mid-step (checked between steps). */
 export function isCommand(text: string): boolean {
@@ -320,7 +321,7 @@ async function approvePlan(ctx: Ctx, job: Job): Promise<void> {
     }
     log(job.identifier, 'plan pre-approved');
   } else {
-    log(job.identifier, `-approveplan- ignored in ${job.state}`);
+    log(job.identifier, `-autobuild- ignored in ${job.state}`);
   }
 }
 

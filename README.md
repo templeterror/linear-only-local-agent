@@ -68,7 +68,7 @@ Now add the `agent` label to a ticket and watch the **Jobs** tab (or `linear-age
   "planner":  { "model": "sonnet", "timeoutMin": 6 },                        // Claude Code, on your subscription
   "verifier": { "model": "sonnet", "maxRetries": 2, "timeoutMin": 6 },
   "supabase": { "applyToDev": true },      // worker applies migrations to the DEV project via Cursor's Supabase MCP
-  "planApprovalGate": true,                // false = build as soon as the plan is posted (per ticket: reply `-approveplan-`)
+  "planApprovalGate": true,                // false = build as soon as the plan is posted (per ticket: reply `-autobuild-`)
   "approvalGate": true,                    // false = open the PR as soon as the verifier passes
   "concurrency": 1, "pollSeconds": 25, "screenshots": true,
   "testTimeoutMin": 10, "devBootTimeoutSec": 120
@@ -83,7 +83,7 @@ Now add the `agent` label to a ticket and watch the **Jobs** tab (or `linear-age
 | `waiting_on_human` | 🤖 **question** — reply in a comment; the planner resumes its session with full repo context |
 | `declined` | 🤖 **declined** with the reason (auth, payments, destructive SQL, CI/secrets, out of scope) |
 | `planning` | 🤖 **plan**: branch, steps, acceptance criteria |
-| `awaiting_plan_approval` | Reply `approve` → build starts. Anything else is feedback on the plan → 🤖 **revised plan**, and it waits again. Reply **`-approveplan-`** any time after pickup to skip this gate for that ticket. |
+| `awaiting_plan_approval` | Reply `approve` → build starts. Anything else is feedback on the plan → 🤖 **revised plan**, and it waits again. Reply **`-autobuild-`** any time after pickup to skip this gate for that ticket. |
 | `building` → `testing` → `verifying` | 🤖 **built**: diff stat + worker summary after each build; verifier may post *retry n/2* with fix instructions |
 | `awaiting_approval` | 🤖 **ready for review**: screenshot, criteria ✅/⚠️, diff stat, migration SQL, test output. Reply `approve` → PR. Anything else → sent back to the worker as change requests. |
 | `pr_open` | 🤖 **PR opened** + link attached, issue moved to your review state |
@@ -91,7 +91,7 @@ Now add the `agent` label to a ticket and watch the **Jobs** tab (or `linear-age
 
 Three commands work in any state where the daemon is listening (question, plan review, PR review, failed, declined, and between steps):
 
-- **`-approveplan-`** — approve the plan (at the gate) or pre-approve it (earlier), so the build starts without a plan review.
+- **`-autobuild-`** — plan and build unattended: posted after pickup it pre-approves the plan; at the gate it approves it. (`-approveplan-` is the same command.)
 - **`-tryagain-`** — same worktree and branch, redo from the build step (back to the plan gate if the plan was never approved; re-triage if there is no plan yet).
 - **`-startover-`** — delete the worktree and local branch, fresh triage and plan.
 

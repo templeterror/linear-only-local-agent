@@ -16,7 +16,7 @@ export const fmt = {
   pickedUp: (projectName: string, planGate: boolean) =>
     wrap(
       'picked up',
-      `Working on this in \`${projectName}\`. I'll triage it, write a plan, ${planGate ? 'wait for your approval on the plan, ' : ''}build it in an isolated worktree, run tests locally, verify, and post a preview here.${planGate ? '\n\n_Reply **`-approveplan-`** now to skip the plan review and build as soon as the plan is ready._' : ''}`,
+      `Working on this in \`${projectName}\`. I'll triage it, write a plan, ${planGate ? 'wait for your approval on the plan, ' : ''}build it in an isolated worktree, run tests locally, verify, and post a preview here.${planGate ? '\n\n_Reply **`-autobuild-`** now to skip the plan review and build as soon as the plan is ready._' : ''}`,
     ),
 
   question: (question: string) => wrap('question', `${question}\n\n_Reply in a comment and I'll continue from where I left off. (\`-startover-\` re-plans from scratch.)_`),
@@ -62,7 +62,7 @@ export const fmt = {
 
   planApproved: () => wrap('plan approved', 'Starting the build.'),
 
-  planPreApproved: () => wrap('plan pre-approved', "Got it — I'll start building as soon as the plan is ready, without waiting for a review."),
+  planPreApproved: () => wrap('autobuild', "Got it — I'll start building as soon as the plan is ready, without waiting for a review."),
 
   planChangesRequested: (text: string) => wrap('revising the plan', `Taking this back to the planner:\n\n> ${text.trim().replace(/\n/g, '\n> ')}`),
 
